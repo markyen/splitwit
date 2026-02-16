@@ -11,10 +11,13 @@ service cloud.firestore {
         && data.createdAt is timestamp;
     }
 
-    function isValidExpenseUpdate(data) {
-      return data.keys().hasOnly(['total', 'receiptUrl'])
-        && (data.total == null || (data.total is number && data.total >= 0))
-        && (data.receiptUrl == null || (data.receiptUrl is string && data.receiptUrl.size() < 2048));
+    function isValidExpenseUpdate(before, after) {
+      // Only allow updating total and receiptUrl, createdAt must remain unchanged
+      let changedKeys = after.diff(before).affectedKeys();
+      return changedKeys.hasOnly(['total', 'receiptUrl'])
+        && (after.total == null || (after.total is number && after.total >= 0))
+        && (after.receiptUrl == null || (after.receiptUrl is string && after.receiptUrl.size() < 2048))
+        && after.createdAt == before.createdAt;
     }
 
     function isValidParticipant(data) {
@@ -63,7 +66,7 @@ service cloud.firestore {
 
       // Allow updating existing expenses (total, receiptUrl only)
       allow update: if isValidShareCode(expenseCode)
-        && isValidExpenseUpdate(request.resource.data);
+        && isValidExpenseUpdate(resource.data, request.resource.data);
 
       // Disallow deleting expenses (optional: enable if needed)
       allow delete: if false;
