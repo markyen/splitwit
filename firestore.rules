@@ -1,0 +1,103 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isValidExpense(data) {
+      return data.keys().hasOnly(['total', 'receiptUrl', 'createdAt'])
+        && (data.total == null || (data.total is number && data.total >= 0))
+        && (data.receiptUrl == null || (data.receiptUrl is string && data.receiptUrl.size() < 2048))
+        && data.createdAt is timestamp;
+    }
+
+    function isValidExpenseUpdate(data) {
+      return data.keys().hasOnly(['total', 'receiptUrl'])
+        && (data.total == null || (data.total is number && data.total >= 0))
+        && (data.receiptUrl == null || (data.receiptUrl is string && data.receiptUrl.size() < 2048));
+    }
+
+    function isValidParticipant(data) {
+      return data.keys().hasOnly(['name', 'order'])
+        && data.name is string
+        && data.name.size() > 0
+        && data.name.size() <= 100
+        && data.order is number
+        && data.order >= 0;
+    }
+
+    function isValidLineItem(data) {
+      return data.keys().hasOnly(['name', 'price', 'order', 'assignedTo'])
+        && data.name is string
+        && data.name.size() > 0
+        && data.name.size() <= 200
+        && data.price is number
+        && data.order is number
+        && data.order >= 0
+        && data.assignedTo is list
+        && data.assignedTo.size() <= 50;
+    }
+
+    function isValidLineItemUpdate(data) {
+      return data.keys().hasAny(['name', 'price', 'order', 'assignedTo'])
+        && data.keys().hasOnly(['name', 'price', 'order', 'assignedTo'])
+        && (!('name' in data) || (data.name is string && data.name.size() > 0 && data.name.size() <= 200))
+        && (!('price' in data) || data.price is number)
+        && (!('order' in data) || (data.order is number && data.order >= 0))
+        && (!('assignedTo' in data) || (data.assignedTo is list && data.assignedTo.size() <= 50));
+    }
+
+    function isValidShareCode(code) {
+      // Share codes are 6 uppercase alphanumeric characters
+      return code.size() == 6 && code.matches('^[A-Z2-9]+$');
+    }
+
+    // Expenses collection
+    match /expenses/{expenseCode} {
+      // Only allow access to valid share codes (prevents enumeration)
+      allow read: if isValidShareCode(expenseCode);
+
+      // Allow creating new expenses with valid data
+      allow create: if isValidShareCode(expenseCode)
+        && isValidExpense(request.resource.data);
+
+      // Allow updating existing expenses (total, receiptUrl only)
+      allow update: if isValidShareCode(expenseCode)
+        && isValidExpenseUpdate(request.resource.data);
+
+      // Disallow deleting expenses (optional: enable if needed)
+      allow delete: if false;
+
+      // Participants subcollection
+      match /participants/{participantId} {
+        allow read: if isValidShareCode(expenseCode);
+
+        allow create: if isValidShareCode(expenseCode)
+          && isValidParticipant(request.resource.data);
+
+        allow update: if isValidShareCode(expenseCode)
+          && isValidParticipant(request.resource.data);
+
+        allow delete: if isValidShareCode(expenseCode);
+      }
+
+      // Line items subcollection
+      match /lineItems/{lineItemId} {
+        allow read: if isValidShareCode(expenseCode);
+
+        allow create: if isValidShareCode(expenseCode)
+          && isValidLineItem(request.resource.data);
+
+        allow update: if isValidShareCode(expenseCode)
+          && isValidLineItemUpdate(request.resource.data);
+
+        allow delete: if isValidShareCode(expenseCode);
+      }
+    }
+
+    // Deny access to all other collections
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
