@@ -93,7 +93,10 @@ export function TotalEditor({ code, total, subtotal, onEditStart }: TotalEditorP
 
   return (
     <div className="rounded-lg bg-blue-50 border-2 border-blue-200 p-4">
-      <p className="text-sm font-medium text-gray-700 mb-2">Edit Total</p>
+      <div className="mb-2">
+        <p className="text-sm font-medium text-gray-700">Edit Total</p>
+        <p className="text-xs text-gray-500">Final amount charged, including tip &amp; tax</p>
+      </div>
 
       <div className="relative mb-3">
         <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-lg">$</span>
@@ -110,16 +113,18 @@ export function TotalEditor({ code, total, subtotal, onEditStart }: TotalEditorP
         />
       </div>
 
-      {/* Tip shortcuts */}
+      {/* Adjustment shortcuts (tip, tax, discounts) */}
       <div className="mb-4">
-        <p className="text-xs text-gray-500 mb-2">Quick tip options:</p>
+        <p className="text-xs text-gray-500 mb-2">
+          Add tip, tax, &amp; adjustments:
+        </p>
         <div className="flex gap-2">
           <button
             onClick={() => handleShortcut(1)}
             disabled={isSaving}
             className="flex-1 rounded-md border border-gray-300 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 disabled:opacity-50"
           >
-            No tip
+            None
           </button>
           <button
             onClick={() => handleShortcut(1.2)}
