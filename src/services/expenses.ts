@@ -60,6 +60,7 @@ export async function createExpense(): Promise<string> {
   } while (!(await isShareCodeAvailable(code)));
 
   const expense: Expense = {
+    title: null,
     total: null,
     receiptUrl: null,
     createdAt: Timestamp.now(),
@@ -86,6 +87,14 @@ export async function updateExpenseTotal(
 ): Promise<void> {
   const docRef = doc(expensesCollection, code);
   await updateDoc(docRef, { total });
+}
+
+export async function updateExpenseTitle(
+  code: string,
+  title: string | null
+): Promise<void> {
+  const docRef = doc(expensesCollection, code);
+  await updateDoc(docRef, { title });
 }
 
 export async function updateExpenseReceiptUrl(

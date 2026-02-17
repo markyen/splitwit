@@ -1,6 +1,6 @@
 'use client';
 
-import { use, useState, useMemo } from 'react';
+import { use, useState, useEffect, useRef, useMemo } from 'react';
 import Link from 'next/link';
 import { DragStartEvent, DragEndEvent } from '@dnd-kit/core';
 import { arrayMove } from '@dnd-kit/sortable';
@@ -15,7 +15,7 @@ import { ParticipantEditorModal } from '@/components/participants/ParticipantEdi
 import { TotalEditor } from '@/components/total/TotalEditor';
 import { ShareButton } from '@/components/share/ShareButton';
 import { SummarySection } from '@/components/summary/SummarySection';
-import { updateLineItem } from '@/services/expenses';
+import { updateLineItem, updateExpenseTitle } from '@/services/expenses';
 import { Participant, EVERYONE_MARKER } from '@/types';
 
 interface ExpensePageProps {
@@ -31,6 +31,15 @@ export default function ExpensePage({ params }: ExpensePageProps) {
   const [isParticipantModalOpen, setIsParticipantModalOpen] = useState(false);
   const [activeParticipant, setActiveParticipant] = useState<Participant | 'everyone' | null>(null);
   const [dismissLineItemEditor, setDismissLineItemEditor] = useState(false);
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [titleValue, setTitleValue] = useState('');
+  const titleInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (isEditingTitle && titleInputRef.current) {
+      titleInputRef.current.focus();
+    }
+  }, [isEditingTitle]);
 
   const loading = expenseLoading || participantsLoading || lineItemsLoading;
 
@@ -186,6 +195,47 @@ export default function ExpensePage({ params }: ExpensePageProps) {
         </header>
 
         <main className="max-w-lg mx-auto px-4 py-6 space-y-6">
+          {/* Title Section */}
+          {isEditingTitle ? (
+            <input
+              ref={titleInputRef}
+              type="text"
+              value={titleValue}
+              onChange={(e) => setTitleValue(e.target.value)}
+              onKeyDown={async (e) => {
+                if (e.key === 'Enter') {
+                  const trimmed = titleValue.trim();
+                  await updateExpenseTitle(code, trimmed || null);
+                  setIsEditingTitle(false);
+                } else if (e.key === 'Escape') {
+                  setTitleValue(expense?.title ?? '');
+                  setIsEditingTitle(false);
+                }
+              }}
+              onBlur={async () => {
+                const trimmed = titleValue.trim();
+                await updateExpenseTitle(code, trimmed || null);
+                setIsEditingTitle(false);
+              }}
+              placeholder="Add a title..."
+              className="w-full text-lg font-semibold text-gray-900 placeholder-gray-400 bg-transparent border-b-2 border-blue-500 outline-none pb-1"
+            />
+          ) : (
+            <button
+              onClick={() => {
+                setTitleValue(expense?.title ?? '');
+                setIsEditingTitle(true);
+              }}
+              className="w-full text-left"
+            >
+              {expense?.title ? (
+                <span className="text-lg font-semibold text-gray-900">{expense.title}</span>
+              ) : (
+                <span className="text-lg text-gray-400">Add a title...</span>
+              )}
+            </button>
+          )}
+
           {/* Participants Section - moved above items for better drag UX */}
           <section>
             <div className="flex items-center justify-between mb-3">

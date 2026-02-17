@@ -3,6 +3,7 @@ import { Timestamp } from 'firebase/firestore';
 // Firestore document types
 
 export interface Expense {
+  title: string | null;
   total: number | null;
   receiptUrl: string | null;
   createdAt: Timestamp;
