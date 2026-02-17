@@ -190,15 +190,17 @@ export default function ExpensePage({ params }: ExpensePageProps) {
           <section>
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm font-medium text-gray-700">Participants</h2>
-              <button
-                onClick={() => {
-                  setDismissLineItemEditor(true);
-                  setIsParticipantModalOpen(true);
-                }}
-                className="text-sm text-blue-600 hover:text-blue-700"
-              >
-                {participants.length === 0 ? 'Add participants' : 'Edit'}
-              </button>
+              {participants.length > 0 && (
+                <button
+                  onClick={() => {
+                    setDismissLineItemEditor(true);
+                    setIsParticipantModalOpen(true);
+                  }}
+                  className="text-sm text-blue-600 hover:text-blue-700"
+                >
+                  Edit
+                </button>
+              )}
             </div>
             <DraggableParticipantBar
               participants={participants}

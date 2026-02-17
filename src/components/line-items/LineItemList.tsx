@@ -178,18 +178,12 @@ export function LineItemList({ code, lineItems, participants, dismissEditor, onE
       ) : (
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-sm font-medium text-gray-700">Items</h2>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => setIsSelectionMode(true)}
-              className="text-sm text-gray-500 hover:text-gray-700"
-            >
-              Select
-            </button>
-            <ReceiptUploader
-              code={code}
-              startingOrder={nextOrder}
-            />
-          </div>
+          <button
+            onClick={() => setIsSelectionMode(true)}
+            className="text-sm text-gray-500 hover:text-gray-700"
+          >
+            Select
+          </button>
         </div>
       )}
 
