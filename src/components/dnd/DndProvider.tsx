@@ -13,6 +13,7 @@ import {
   closestCenter,
   pointerWithin,
   CollisionDetection,
+  MeasuringStrategy,
 } from '@dnd-kit/core';
 
 interface DndProviderProps {
@@ -73,6 +74,12 @@ export function DndProvider({
       collisionDetection={customCollisionDetection}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
+      measuring={{
+        droppable: {
+          strategy: MeasuringStrategy.Always,
+          frequency: 100,
+        },
+      }}
     >
       {children}
       <DragOverlay dropAnimation={null}>
