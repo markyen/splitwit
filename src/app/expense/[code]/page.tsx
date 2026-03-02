@@ -289,6 +289,7 @@ export default function ExpensePage({ params }: ExpensePageProps) {
               <SummarySection
                 lineItems={lineItems}
                 participants={participants}
+                total={expense.total}
               />
             </section>
           )}

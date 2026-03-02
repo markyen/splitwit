@@ -6,6 +6,7 @@ import { LineItem, Participant, EVERYONE_MARKER } from '@/types';
 interface SummarySectionProps {
   lineItems: LineItem[];
   participants: Participant[];
+  total: number | null;
 }
 
 interface ItemShare {
@@ -20,7 +21,7 @@ interface ParticipantShare {
   items: ItemShare[];
 }
 
-export function SummarySection({ lineItems, participants }: SummarySectionProps) {
+export function SummarySection({ lineItems, participants, total }: SummarySectionProps) {
   const payer = participants[0];
 
   const shares = useMemo(() => {
@@ -66,8 +67,24 @@ export function SummarySection({ lineItems, participants }: SummarySectionProps)
       }
     }
 
-    return Array.from(shareMap.values());
-  }, [lineItems, participants]);
+    const shares = Array.from(shareMap.values());
+
+    // Scale shares by total/subtotal ratio to account for tax, tip, etc.
+    if (total != null) {
+      const subtotal = lineItems.reduce((sum, item) => sum + item.price, 0);
+      if (subtotal > 0) {
+        const ratio = total / subtotal;
+        for (const share of shares) {
+          share.amount *= ratio;
+          for (const item of share.items) {
+            item.share *= ratio;
+          }
+        }
+      }
+    }
+
+    return shares;
+  }, [lineItems, participants, total]);
 
   const formatPrice = (price: number) => {
     return new Intl.NumberFormat('en-US', {
