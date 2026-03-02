@@ -142,6 +142,15 @@ export function SummarySection({ lineItems, participants, total }: SummarySectio
               : 'No amounts owed'}
           </p>
         )}
+
+        {nonPayerShares.length > 1 && (
+          <div className="flex items-center justify-between gap-3 pt-3 border-t border-green-200">
+            <span className="text-sm font-medium text-gray-600">Total owed to {payer.name}:</span>
+            <span className="text-lg font-bold text-green-700 shrink-0">
+              {formatPrice(nonPayerShares.reduce((sum, s) => sum + s.amount, 0))}
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Payer's portion */}
