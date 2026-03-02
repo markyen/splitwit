@@ -30,8 +30,16 @@ const customCollisionDetection: CollisionDetection = (args) => {
   const isParticipantDrag = active.data.current?.type === 'participant';
 
   if (isParticipantDrag) {
-    // Use pointerWithin for participant drops - only match when pointer is inside
-    return pointerWithin(args);
+    // Filter out sortable droppables — only consider explicit lineitem-* droppables.
+    // Without this, the sortable strategy can extend a line item's sortable rect
+    // downward into the next item's space, causing drops to target the item above.
+    const filtered = {
+      ...args,
+      droppableContainers: args.droppableContainers.filter(
+        (container) => container.data.current?.type === 'lineitem'
+      ),
+    };
+    return pointerWithin(filtered);
   }
 
   // Use closestCenter for line item reordering
