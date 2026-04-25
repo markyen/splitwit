@@ -3,7 +3,10 @@
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { LineItem, Participant, EVERYONE_MARKER } from '@/types';
-import { getParticipantActiveChipClasses, getParticipantChipClasses } from '@/utils/colors';
+import {
+  getParticipantActiveChipClassesForParticipant,
+  getParticipantChipClassesForParticipant,
+} from '@/utils/colors';
 
 const EVERYONE_DEFAULT_CLASSES = 'border-slate-200 bg-slate-100 text-slate-700';
 const EVERYONE_ACTIVE_CLASSES = 'border-slate-800 bg-slate-800 text-white';
@@ -151,8 +154,8 @@ export function SortableLineItemRow({
                     key={p.id}
                     className={`inline-flex items-center gap-1 rounded-lg border px-2 py-0.5 text-xs transition-all ${
                       selectedParticipantId === p.id
-                        ? `font-bold shadow-sm ring-2 ring-black/10 ${getParticipantActiveChipClasses(p.name)}`
-                        : `font-medium ${getParticipantChipClasses(p.name)}`
+                        ? `font-bold shadow-sm ring-2 ring-black/10 ${getParticipantActiveChipClassesForParticipant(p, participants)}`
+                        : `font-medium ${getParticipantChipClassesForParticipant(p, participants)}`
                     }`}
                   >
                     {p.name}

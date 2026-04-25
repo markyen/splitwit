@@ -3,16 +3,18 @@
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { Participant } from '@/types';
-import { getParticipantChipClasses } from '@/utils/colors';
+import { getParticipantChipClassesForParticipant } from '@/utils/colors';
 
 interface SortableParticipantChipProps {
   participant: Participant;
+  participants: Participant[];
   isPayer: boolean;
   onRemove: () => void;
 }
 
 export function SortableParticipantChip({
   participant,
+  participants,
   isPayer,
   onRemove,
 }: SortableParticipantChipProps) {
@@ -30,7 +32,7 @@ export function SortableParticipantChip({
     transition,
   };
 
-  const colorClasses = getParticipantChipClasses(participant.name);
+  const colorClasses = getParticipantChipClassesForParticipant(participant, participants);
 
   return (
     <div

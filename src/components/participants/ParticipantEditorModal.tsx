@@ -191,6 +191,7 @@ export function ParticipantEditorModal({
                     <SortableParticipantChip
                       key={participant.id}
                       participant={participant}
+                      participants={sortedParticipants}
                       isPayer={index === 0}
                       onRemove={() => handleRemoveParticipant(participant.id)}
                     />

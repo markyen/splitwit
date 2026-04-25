@@ -1,7 +1,10 @@
 'use client';
 
 import { EVERYONE_MARKER, Participant } from '@/types';
-import { getParticipantActiveChipClasses, getParticipantChipClasses } from '@/utils/colors';
+import {
+  getParticipantActiveChipClassesForParticipant,
+  getParticipantChipClassesForParticipant,
+} from '@/utils/colors';
 
 const EVERYONE_DEFAULT_CLASSES = 'border-slate-200 bg-slate-100 text-slate-700';
 const EVERYONE_ACTIVE_CLASSES = 'border-slate-800 bg-slate-800 text-white';
@@ -45,12 +48,12 @@ export function ParticipantChipList({
         {participants.map((participant, index) => (
           <Chip
             key={participant.id}
-              label={participant.name}
-              isSelected={selectedParticipantId === participant.id}
-              onClick={() => onSelectionChange(selectedParticipantId === participant.id ? null : participant.id)}
-              className={selectedParticipantId === participant.id
-              ? getParticipantActiveChipClasses(participant.name)
-              : getParticipantChipClasses(participant.name)}
+            label={participant.name}
+            isSelected={selectedParticipantId === participant.id}
+            onClick={() => onSelectionChange(selectedParticipantId === participant.id ? null : participant.id)}
+            className={selectedParticipantId === participant.id
+              ? getParticipantActiveChipClassesForParticipant(participant, participants)
+              : getParticipantChipClassesForParticipant(participant, participants)}
             prefix={index === 0 ? 'Paid' : undefined}
           />
         ))}
