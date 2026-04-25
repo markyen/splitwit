@@ -2,15 +2,18 @@
 
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { useDroppable } from '@dnd-kit/core';
 import { LineItem, Participant, EVERYONE_MARKER } from '@/types';
-import { getParticipantColorClasses } from '@/utils/colors';
+import { getParticipantActiveChipClasses, getParticipantChipClasses } from '@/utils/colors';
+
+const EVERYONE_DEFAULT_CLASSES = 'border-slate-200 bg-slate-100 text-slate-700';
+const EVERYONE_ACTIVE_CLASSES = 'border-slate-800 bg-slate-800 text-white';
 
 interface SortableLineItemRowProps {
   item: LineItem;
   participants: Participant[];
+  selectedParticipantId: string | null;
   onEdit: (field: 'name' | 'price') => void;
-  onRemoveAssignment: (participantId: string) => void;
+  onToggleAssignment: () => void;
   isSelectionMode: boolean;
   isSelected: boolean;
   onToggleSelect: () => void;
@@ -19,8 +22,9 @@ interface SortableLineItemRowProps {
 export function SortableLineItemRow({
   item,
   participants,
+  selectedParticipantId,
   onEdit,
-  onRemoveAssignment,
+  onToggleAssignment,
   isSelectionMode,
   isSelected,
   onToggleSelect,
@@ -36,14 +40,6 @@ export function SortableLineItemRow({
     id: item.id,
     data: {
       type: 'sortable-lineitem',
-      lineItemId: item.id,
-    },
-  });
-
-  const { isOver, setNodeRef: setDroppableRef } = useDroppable({
-    id: `lineitem-${item.id}`,
-    data: {
-      type: 'lineitem',
       lineItemId: item.id,
     },
   });
@@ -70,6 +66,8 @@ export function SortableLineItemRow({
   const handleRowClick = () => {
     if (isSelectionMode) {
       onToggleSelect();
+    } else if (selectedParticipantId) {
+      onToggleAssignment();
     }
   };
 
@@ -80,13 +78,12 @@ export function SortableLineItemRow({
       className={`${isDragging ? 'opacity-50 z-10' : ''}`}
     >
       <div
-        ref={setDroppableRef}
         onClick={handleRowClick}
         className={`rounded-lg bg-white p-3 border-2 transition-colors ${
           isSelected
             ? 'border-blue-500 bg-blue-50'
-            : isOver
-              ? 'border-blue-400 bg-blue-50'
+            : selectedParticipantId
+              ? 'cursor-pointer border-gray-200 hover:border-blue-300 hover:bg-blue-50/50'
               : 'border-gray-200 hover:border-gray-300'
         } ${isSelectionMode ? 'cursor-pointer' : ''}`}
       >
@@ -119,7 +116,10 @@ export function SortableLineItemRow({
           <div className="flex-1 min-w-0">
             <button
               onClick={(e) => {
-                if (!isSelectionMode) {
+                e.stopPropagation();
+                if (selectedParticipantId && !isSelectionMode) {
+                  onToggleAssignment();
+                } else if (!isSelectionMode) {
                   onEdit('name');
                 }
               }}
@@ -133,29 +133,29 @@ export function SortableLineItemRow({
             <div className="flex flex-wrap gap-1 mt-2 min-h-[28px]">
               {item.assignedTo.length === 0 ? (
                 <span className="text-xs text-gray-400 py-1">
-                  Drag a participant here
+                  {selectedParticipantId ? 'Tap to assign selected chip' : 'No participants assigned'}
                 </span>
               ) : hasEveryone ? (
                 <span
-                  onClick={() => onRemoveAssignment(EVERYONE_MARKER)}
-                  className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium bg-blue-100 text-blue-800 cursor-pointer hover:bg-blue-200"
+                  className={`inline-flex items-center gap-1 rounded-lg border px-2 py-0.5 text-xs transition-all ${
+                    selectedParticipantId === EVERYONE_MARKER
+                      ? `font-bold shadow-sm ring-2 ring-black/10 ${EVERYONE_ACTIVE_CLASSES}`
+                      : `font-medium ${EVERYONE_DEFAULT_CLASSES}`
+                  }`}
                 >
                   Everyone
-                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
                 </span>
               ) : (
                 assignedParticipants.map((p) => (
                   <span
                     key={p.id}
-                    onClick={() => onRemoveAssignment(p.id)}
-                    className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium cursor-pointer border hover:opacity-80 ${getParticipantColorClasses(p.name)}`}
+                    className={`inline-flex items-center gap-1 rounded-lg border px-2 py-0.5 text-xs transition-all ${
+                      selectedParticipantId === p.id
+                        ? `font-bold shadow-sm ring-2 ring-black/10 ${getParticipantActiveChipClasses(p.name)}`
+                        : `font-medium ${getParticipantChipClasses(p.name)}`
+                    }`}
                   >
                     {p.name}
-                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
                   </span>
                 ))
               )}
@@ -163,7 +163,14 @@ export function SortableLineItemRow({
           </div>
 
           <button
-            onClick={() => !isSelectionMode && onEdit('price')}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (selectedParticipantId && !isSelectionMode) {
+                onToggleAssignment();
+              } else if (!isSelectionMode) {
+                onEdit('price');
+              }
+            }}
             disabled={isSelectionMode}
             className="font-medium text-gray-900 shrink-0"
           >

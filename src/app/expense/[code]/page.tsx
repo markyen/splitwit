@@ -2,21 +2,20 @@
 
 import { use, useState, useEffect, useRef, useMemo } from 'react';
 import Link from 'next/link';
-import { DragStartEvent, DragEndEvent } from '@dnd-kit/core';
+import { DragEndEvent } from '@dnd-kit/core';
 import { arrayMove } from '@dnd-kit/sortable';
 import { useExpense } from '@/hooks/useExpense';
 import { useParticipants } from '@/hooks/useParticipants';
 import { useLineItems } from '@/hooks/useLineItems';
 import { DndProvider } from '@/components/dnd/DndProvider';
 import { LineItemList } from '@/components/line-items/LineItemList';
-import { DraggableParticipantBar } from '@/components/participants/DraggableParticipantBar';
-import { ParticipantPillOverlay } from '@/components/participants/DraggableParticipantPill';
+import { ParticipantChipList } from '@/components/participants/ParticipantChipList';
 import { ParticipantEditorModal } from '@/components/participants/ParticipantEditorModal';
 import { TotalEditor } from '@/components/total/TotalEditor';
 import { ShareButton } from '@/components/share/ShareButton';
 import { SummarySection } from '@/components/summary/SummarySection';
 import { updateLineItem, updateExpenseTitle } from '@/services/expenses';
-import { Participant, EVERYONE_MARKER } from '@/types';
+import { EVERYONE_MARKER } from '@/types';
 
 interface ExpensePageProps {
   params: Promise<{ code: string }>;
@@ -29,7 +28,7 @@ export default function ExpensePage({ params }: ExpensePageProps) {
   const { lineItems, loading: lineItemsLoading } = useLineItems(code);
 
   const [isParticipantModalOpen, setIsParticipantModalOpen] = useState(false);
-  const [activeParticipant, setActiveParticipant] = useState<Participant | 'everyone' | null>(null);
+  const [selectedParticipantId, setSelectedParticipantId] = useState<string | null>(null);
   const [dismissLineItemEditor, setDismissLineItemEditor] = useState(false);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleValue, setTitleValue] = useState('');
@@ -54,67 +53,28 @@ export default function ExpensePage({ params }: ExpensePageProps) {
     return lineItems.every((item) => item.assignedTo.length > 0);
   }, [lineItems]);
 
-  // Determine if "Everybody" should be shown
-  const showEverybodyPill = participants.length > 0;
-
-  const handleDragStart = (event: DragStartEvent) => {
-    const { active } = event;
-    // Dismiss line item editor on any drag
-    setDismissLineItemEditor(true);
-    if (active.data.current?.type === 'participant') {
-      setActiveParticipant(active.data.current.participant);
+  const effectiveSelectedParticipantId = useMemo(() => {
+    if (!selectedParticipantId) {
+      return null;
     }
+
+    if (selectedParticipantId === EVERYONE_MARKER) {
+      return participants.length > 0 ? EVERYONE_MARKER : null;
+    }
+
+    return participants.some((participant) => participant.id === selectedParticipantId)
+      ? selectedParticipantId
+      : null;
+  }, [participants, selectedParticipantId]);
+
+  const handleDragStart = () => {
+    setDismissLineItemEditor(true);
   };
 
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
-    setActiveParticipant(null);
 
     if (!over) return;
-
-    // Check if a participant is being dragged (for assignment to line item)
-    const isParticipantDrag = active.data.current?.type === 'participant';
-
-    if (isParticipantDrag) {
-      // Handle participant assignment to line item
-      const overData = over.data.current;
-      let lineItemId: string | undefined;
-
-      if (overData?.type === 'lineitem' || overData?.type === 'sortable-lineitem') {
-        // Dropped on the line item (either droppable or sortable area)
-        lineItemId = overData.lineItemId as string;
-      }
-
-      // Only assign when dropped on a line item, not above/below
-      if (!lineItemId) return;
-
-      const lineItem = lineItems.find((li) => li.id === lineItemId);
-      if (!lineItem) return;
-
-      const participantId = active.id as string;
-
-      // Don't add if already assigned
-      if (lineItem.assignedTo.includes(participantId)) return;
-
-      // If adding "everyone", replace all other assignments
-      // If already has "everyone", don't add individual participants
-      let newAssignedTo: string[];
-      if (participantId === EVERYONE_MARKER) {
-        newAssignedTo = [EVERYONE_MARKER];
-      } else if (lineItem.assignedTo.includes(EVERYONE_MARKER)) {
-        // Can't add individual when everyone is assigned
-        return;
-      } else {
-        newAssignedTo = [...lineItem.assignedTo, participantId];
-      }
-
-      try {
-        await updateLineItem(code, lineItemId, { assignedTo: newAssignedTo });
-      } catch (error) {
-        console.error('Error assigning participant:', error);
-      }
-      return;
-    }
 
     // Check if this is a line item reorder (both active and over are line item IDs)
     const activeLineItem = lineItems.find((li) => li.id === active.id);
@@ -171,14 +131,6 @@ export default function ExpensePage({ params }: ExpensePageProps) {
     <DndProvider
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
-      overlay={
-        activeParticipant && (
-          <ParticipantPillOverlay
-            participant={activeParticipant}
-            isPayer={activeParticipant !== 'everyone' && participants[0]?.id === activeParticipant.id}
-          />
-        )
-      }
     >
       <div className="min-h-screen pb-24">
         {/* Header */}
@@ -236,7 +188,7 @@ export default function ExpensePage({ params }: ExpensePageProps) {
             </button>
           )}
 
-          {/* Participants Section - moved above items for better drag UX */}
+          {/* Participants Section */}
           <section>
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm font-medium text-gray-700">Participants</h2>
@@ -252,10 +204,14 @@ export default function ExpensePage({ params }: ExpensePageProps) {
                 </button>
               )}
             </div>
-            <DraggableParticipantBar
+            <ParticipantChipList
               participants={participants}
-              showEverybody={showEverybodyPill}
-              onTap={() => {
+              selectedParticipantId={effectiveSelectedParticipantId}
+              onSelectionChange={(participantId) => {
+                setDismissLineItemEditor(true);
+                setSelectedParticipantId(participantId);
+              }}
+              onTapEmptyState={() => {
                 setDismissLineItemEditor(true);
                 setIsParticipantModalOpen(true);
               }}
@@ -268,6 +224,7 @@ export default function ExpensePage({ params }: ExpensePageProps) {
               code={code}
               lineItems={lineItems}
               participants={participants}
+              selectedParticipantId={effectiveSelectedParticipantId}
               dismissEditor={dismissLineItemEditor}
               onEditorDismissed={() => setDismissLineItemEditor(false)}
             />

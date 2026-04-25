@@ -7,16 +7,25 @@ import { SortableLineItemRow } from './SortableLineItemRow';
 import { LineItemEditor, LineItemEditorHandle } from './LineItemEditor';
 import { ReceiptUploader } from '@/components/receipt/ReceiptUploader';
 import { addLineItem, updateLineItem, removeLineItemsBatch } from '@/services/expenses';
+import { toggleAssignmentForParticipant } from '@/utils/assignments';
 
 interface LineItemListProps {
   code: string;
   lineItems: LineItem[];
   participants: Participant[];
+  selectedParticipantId: string | null;
   dismissEditor?: boolean;
   onEditorDismissed?: () => void;
 }
 
-export function LineItemList({ code, lineItems, participants, dismissEditor, onEditorDismissed }: LineItemListProps) {
+export function LineItemList({
+  code,
+  lineItems,
+  participants,
+  selectedParticipantId,
+  dismissEditor,
+  onEditorDismissed,
+}: LineItemListProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingField, setEditingField] = useState<'name' | 'price'>('name');
   const [isAddingNew, setIsAddingNew] = useState(false);
@@ -102,15 +111,26 @@ export function LineItemList({ code, lineItems, participants, dismissEditor, onE
     }
   };
 
-  const handleRemoveAssignment = async (itemId: string, participantId: string) => {
-    const item = lineItems.find((li) => li.id === itemId);
-    if (!item) return;
+  const handleToggleAssignment = async (itemId: string) => {
+    if (!selectedParticipantId) {
+      return;
+    }
 
-    const newAssignedTo = item.assignedTo.filter((id) => id !== participantId);
+    const item = lineItems.find((lineItem) => lineItem.id === itemId);
+    if (!item) {
+      return;
+    }
+
+    const assignedTo = toggleAssignmentForParticipant({
+      assignedTo: item.assignedTo,
+      selectedParticipantId,
+      participants,
+    });
+
     try {
-      await updateLineItem(code, itemId, { assignedTo: newAssignedTo });
+      await updateLineItem(code, itemId, { assignedTo });
     } catch (error) {
-      console.error('Error removing assignment:', error);
+      console.error('Error updating assignment:', error);
     }
   };
 
@@ -204,12 +224,13 @@ export function LineItemList({ code, lineItems, participants, dismissEditor, onE
                 key={item.id}
                 item={item}
                 participants={participants}
+                selectedParticipantId={selectedParticipantId}
                 onEdit={(field) => {
                   setIsAddingNew(false);
                   setEditingField(field);
                   setEditingId(item.id);
                 }}
-                onRemoveAssignment={(participantId) => handleRemoveAssignment(item.id, participantId)}
+                onToggleAssignment={() => handleToggleAssignment(item.id)}
                 isSelectionMode={isSelectionMode}
                 isSelected={selectedIds.has(item.id)}
                 onToggleSelect={() => handleToggleSelect(item.id)}

@@ -19,7 +19,7 @@ import {
 } from '@dnd-kit/sortable';
 import { Participant } from '@/types';
 import { addParticipant, removeParticipant, updateParticipant } from '@/services/expenses';
-import { SortableParticipantPill } from './SortableParticipantPill';
+import { SortableParticipantChip } from './SortableParticipantChip';
 
 interface ParticipantEditorModalProps {
   isOpen: boolean;
@@ -188,7 +188,7 @@ export function ParticipantEditorModal({
               >
                 <div className="flex flex-wrap gap-2">
                   {sortedParticipants.map((participant, index) => (
-                    <SortableParticipantPill
+                    <SortableParticipantChip
                       key={participant.id}
                       participant={participant}
                       isPayer={index === 0}

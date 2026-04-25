@@ -16,7 +16,7 @@ A mobile-friendly web app for splitting bills with friends. Scan a receipt or ma
 1. **Create or Join** - Create a new expense or enter a share code to join an existing one
 2. **Add Participants** - Add the names of everyone splitting the bill (first person is marked as the payer)
 3. **Add Items** - Scan a receipt or manually add line items with prices
-4. **Assign Items** - Drag participant pills onto items to assign them. Use "Everybody" to split an item evenly among all participants
+4. **Assign Items** - Select a participant chip, then tap items to toggle assignments. Use "Everyone" to split an item evenly among all participants
 5. **Set the Total** - Enter the final amount charged (including tip, tax, and any adjustments)
 6. **View Summary** - Once all items are assigned, see what each person owes the payer
 
@@ -105,7 +105,7 @@ src/
 ├── components/            # React components
 │   ├── dnd/               # Drag and drop provider
 │   ├── line-items/        # Line item list and editors
-│   ├── participants/      # Participant pills and modals
+│   ├── participants/      # Participant chips and modals
 │   ├── receipt/           # Receipt upload and OCR
 │   ├── share/             # Share button
 │   ├── summary/           # Per-person summary

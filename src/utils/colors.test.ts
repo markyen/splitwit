@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getParticipantColor, getParticipantColorClasses } from './colors';
+import { getParticipantActiveChipClasses, getParticipantChipClasses, getParticipantColor } from './colors';
 
 describe('colors', () => {
   describe('getParticipantColor', () => {
@@ -35,9 +35,15 @@ describe('colors', () => {
       expect(color).toHaveProperty('bg');
       expect(color).toHaveProperty('text');
       expect(color).toHaveProperty('border');
+      expect(color).toHaveProperty('activeBg');
+      expect(color).toHaveProperty('activeText');
+      expect(color).toHaveProperty('activeBorder');
       expect(color.bg).toMatch(/^bg-\w+-\d+$/);
       expect(color.text).toMatch(/^text-\w+-\d+$/);
       expect(color.border).toMatch(/^border-\w+-\d+$/);
+      expect(color.activeBg).toMatch(/^bg-\w+-\d+$/);
+      expect(color.activeText).toMatch(/^text-\w+$/);
+      expect(color.activeBorder).toMatch(/^border-\w+-\d+$/);
     });
 
     it('handles empty string', () => {
@@ -60,9 +66,9 @@ describe('colors', () => {
     });
   });
 
-  describe('getParticipantColorClasses', () => {
+  describe('getParticipantChipClasses', () => {
     it('returns a string of Tailwind classes', () => {
-      const classes = getParticipantColorClasses('Alice');
+      const classes = getParticipantChipClasses('Alice');
       expect(typeof classes).toBe('string');
       expect(classes).toContain('bg-');
       expect(classes).toContain('text-');
@@ -70,15 +76,31 @@ describe('colors', () => {
     });
 
     it('returns consistent classes for same name', () => {
-      const classes1 = getParticipantColorClasses('Bob');
-      const classes2 = getParticipantColorClasses('Bob');
+      const classes1 = getParticipantChipClasses('Bob');
+      const classes2 = getParticipantChipClasses('Bob');
       expect(classes1).toEqual(classes2);
     });
 
     it('includes all three class types', () => {
-      const classes = getParticipantColorClasses('Charlie');
+      const classes = getParticipantChipClasses('Charlie');
       const parts = classes.split(' ');
       expect(parts).toHaveLength(3);
+    });
+  });
+
+  describe('getParticipantActiveChipClasses', () => {
+    it('returns active classes with stronger contrast', () => {
+      const classes = getParticipantActiveChipClasses('Dana');
+      expect(typeof classes).toBe('string');
+      expect(classes).toContain('bg-');
+      expect(classes).toContain('text-');
+      expect(classes).toContain('border-');
+    });
+
+    it('returns consistent active classes for same name', () => {
+      const classes1 = getParticipantActiveChipClasses('Evan');
+      const classes2 = getParticipantActiveChipClasses('Evan');
+      expect(classes1).toEqual(classes2);
     });
   });
 });
