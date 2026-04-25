@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { updateExpenseTotal } from '@/services/expenses';
 
 interface TotalEditorProps {
@@ -14,8 +14,24 @@ export function TotalEditor({ code, total, subtotal, onEditStart }: TotalEditorP
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const displayTotal = total ?? subtotal;
+
+  useEffect(() => {
+    if (!isEditing) {
+      return;
+    }
+
+    const input = inputRef.current;
+    if (!input) {
+      return;
+    }
+
+    input.focus();
+    input.select();
+    input.setSelectionRange(0, input.value.length);
+  }, [isEditing]);
 
   const formatPrice = (price: number) => {
     return new Intl.NumberFormat('en-US', {
@@ -101,13 +117,14 @@ export function TotalEditor({ code, total, subtotal, onEditStart }: TotalEditorP
       <div className="relative mb-3">
         <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-lg">$</span>
         <input
-          type="number"
+          ref={inputRef}
+          type="text"
           inputMode="decimal"
-          step="0.01"
-          min="0"
+          pattern="[0-9]*[.]?[0-9]*"
           value={editValue}
           onChange={(e) => setEditValue(e.target.value)}
           onKeyDown={handleKeyDown}
+          onFocus={(e) => e.currentTarget.select()}
           autoFocus
           className="w-full rounded-lg border border-gray-300 pl-8 pr-4 py-3 text-xl font-bold focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
         />
