@@ -1,13 +1,12 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { LineItem, Participant, EVERYONE_MARKER } from '@/types';
 
 interface SummarySectionProps {
   lineItems: LineItem[];
   participants: Participant[];
   total: number | null;
-  code: string;
   title: string | null;
 }
 
@@ -23,14 +22,9 @@ interface ParticipantShare {
   items: ItemShare[];
 }
 
-export function SummarySection({ lineItems, participants, total, code, title }: SummarySectionProps) {
+export function SummarySection({ lineItems, participants, total, title }: SummarySectionProps) {
   const payer = participants[0];
   const [venmoMode, setVenmoMode] = useState<'charge' | 'pay'>('charge');
-  const [shareUrl, setShareUrl] = useState('');
-
-  useEffect(() => {
-    setShareUrl(`${window.location.origin}/expense/${code}`);
-  }, [code]);
 
   const shares = useMemo(() => {
     const shareMap = new Map<string, ParticipantShare>();
@@ -180,9 +174,7 @@ export function SummarySection({ lineItems, participants, total, code, title }: 
               <a
                 href={buildVenmoLink(
                   share.amount,
-                  `${title ? `${title} - ` : ''}${formatBreakdown(share.items)}${
-                    shareUrl ? ` - ${shareUrl}` : ''
-                  }`
+                  `${title ? `${title} - ` : ''}${formatBreakdown(share.items)}`
                 )}
                 target="_blank"
                 rel="noopener noreferrer"

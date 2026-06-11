@@ -247,7 +247,6 @@ export default function ExpensePage({ params }: ExpensePageProps) {
                 lineItems={lineItems}
                 participants={participants}
                 total={expense.total}
-                code={code}
                 title={expense.title ?? null}
               />
             </section>
