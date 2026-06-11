@@ -1,12 +1,14 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { LineItem, Participant, EVERYONE_MARKER } from '@/types';
 
 interface SummarySectionProps {
   lineItems: LineItem[];
   participants: Participant[];
   total: number | null;
+  code: string;
+  title: string | null;
 }
 
 interface ItemShare {
@@ -21,8 +23,14 @@ interface ParticipantShare {
   items: ItemShare[];
 }
 
-export function SummarySection({ lineItems, participants, total }: SummarySectionProps) {
+export function SummarySection({ lineItems, participants, total, code, title }: SummarySectionProps) {
   const payer = participants[0];
+  const [venmoMode, setVenmoMode] = useState<'charge' | 'pay'>('charge');
+  const [shareUrl, setShareUrl] = useState('');
+
+  useEffect(() => {
+    setShareUrl(`${window.location.origin}/expense/${code}`);
+  }, [code]);
 
   const shares = useMemo(() => {
     const shareMap = new Map<string, ParticipantShare>();
@@ -104,6 +112,16 @@ export function SummarySection({ lineItems, participants, total }: SummarySectio
       .join(' + ');
   };
 
+  const buildVenmoLink = (amount: number, note: string) => {
+    const params = [
+      'recipients=',
+      `txn=${venmoMode}`,
+      `amount=${amount.toFixed(2)}`,
+      `note=${encodeURIComponent(note)}`,
+    ];
+    return `venmo://paycharge?${params.join('&')}`;
+  };
+
   if (!payer) return null;
 
   // Filter out payer from the "owes" list
@@ -111,9 +129,35 @@ export function SummarySection({ lineItems, participants, total }: SummarySectio
 
   return (
     <div className="rounded-lg bg-green-50 border border-green-200 p-4">
-      <h3 className="text-sm font-medium text-green-800 mb-3">
-        Summary
-      </h3>
+      <div className="flex items-center justify-between mb-3 gap-2">
+        <h3 className="text-sm font-medium text-green-800">
+          Summary
+        </h3>
+        <div className="inline-flex rounded-md border border-green-200 bg-white p-0.5 text-xs">
+          <button
+            type="button"
+            onClick={() => setVenmoMode('charge')}
+            className={`px-2 py-1 rounded ${
+              venmoMode === 'charge'
+                ? 'bg-green-100 text-green-800 font-medium'
+                : 'text-gray-500'
+            }`}
+          >
+            I&apos;m collecting
+          </button>
+          <button
+            type="button"
+            onClick={() => setVenmoMode('pay')}
+            className={`px-2 py-1 rounded ${
+              venmoMode === 'pay'
+                ? 'bg-green-100 text-green-800 font-medium'
+                : 'text-gray-500'
+            }`}
+          >
+            I&apos;m paying
+          </button>
+        </div>
+      </div>
 
       <div className="space-y-3">
         {nonPayerShares.map((share) => (
@@ -129,9 +173,25 @@ export function SummarySection({ lineItems, participants, total }: SummarySectio
                 {formatBreakdown(share.items)}
               </p>
             </div>
-            <p className="text-lg font-bold text-green-700 shrink-0">
-              {formatPrice(share.amount)}
-            </p>
+            <div className="flex items-center gap-2 shrink-0">
+              <p className="text-lg font-bold text-green-700">
+                {formatPrice(share.amount)}
+              </p>
+              <a
+                href={buildVenmoLink(
+                  share.amount,
+                  `${title ? `${title} - ` : ''}${formatBreakdown(share.items)}${
+                    shareUrl ? ` - ${shareUrl}` : ''
+                  }`
+                )}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label={`Pay ${payer.name} ${formatPrice(share.amount)} on Venmo`}
+                className="inline-flex items-center justify-center rounded-md bg-[#3D95CE] px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-[#357fb0] active:opacity-80"
+              >
+                Venmo
+              </a>
+            </div>
           </div>
         ))}
 
