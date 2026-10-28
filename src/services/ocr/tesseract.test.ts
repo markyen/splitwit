@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { ReceiptData } from '@/types';
 import { TesseractProvider } from './tesseract';
 
 describe('TesseractProvider', () => {
@@ -7,7 +8,7 @@ describe('TesseractProvider', () => {
   describe('parseReceiptText', () => {
     // Access the private method for testing
     const parseReceiptText = (text: string) => {
-      return (provider as unknown as { parseReceiptText: (text: string) => unknown }).parseReceiptText(text);
+      return (provider as unknown as { parseReceiptText: (text: string) => ReceiptData }).parseReceiptText(text);
     };
 
     it('extracts simple line items with prices', () => {

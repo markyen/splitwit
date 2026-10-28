@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { DndContext } from '@dnd-kit/core';
-import { vi } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { LineItemList } from './LineItemList';
 import { LineItem, Participant } from '@/types';
 
