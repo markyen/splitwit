@@ -2,18 +2,13 @@
 
 import { useMemo, useState } from 'react';
 import { LineItem, Participant, EVERYONE_MARKER } from '@/types';
+import { ItemShare, buildVenmoLink, formatBreakdown } from './breakdown';
 
 interface SummarySectionProps {
   lineItems: LineItem[];
   participants: Participant[];
   total: number | null;
   title: string | null;
-}
-
-interface ItemShare {
-  name: string;
-  share: number;
-  splitCount: number;
 }
 
 interface ParticipantShare {
@@ -95,27 +90,6 @@ export function SummarySection({ lineItems, participants, total, title }: Summar
     }).format(price);
   };
 
-  const formatBreakdown = (items: ItemShare[]) => {
-    return items
-      .map((item) => {
-        if (item.splitCount === 1) {
-          return item.name;
-        }
-        return `${item.name} /${item.splitCount}`;
-      })
-      .join(' + ');
-  };
-
-  const buildVenmoLink = (amount: number, note: string) => {
-    const params = [
-      'recipients=',
-      `txn=${venmoMode}`,
-      `amount=${amount.toFixed(2)}`,
-      `note=${encodeURIComponent(note)}`,
-    ];
-    return `venmo://paycharge?${params.join('&')}`;
-  };
-
   if (!payer) return null;
 
   // Filter out payer from the "owes" list
@@ -173,6 +147,7 @@ export function SummarySection({ lineItems, participants, total, title }: Summar
               </p>
               <a
                 href={buildVenmoLink(
+                  venmoMode,
                   share.amount,
                   `${title ? `${title} - ` : ''}${formatBreakdown(share.items)}`
                 )}
