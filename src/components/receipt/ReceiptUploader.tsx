@@ -25,6 +25,7 @@ export function ReceiptUploader({
   const [receiptData, setReceiptData] = useState<ReceiptData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [link, setLink] = useState('');
 
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -51,46 +52,88 @@ export function ReceiptUploader({
     await processImage(file);
   };
 
-  const processImage = async (file: File) => {
+  const startProcessing = () => {
     setState('processing');
     setProgress(0);
     setError(null);
     setValidationError(null);
+  };
+
+  const reviewOrSave = async (data: ReceiptData) => {
+    setReceiptData(data);
+
+    // Validate: items should sum to subtotal
+    if (data.items.length > 0 && data.subtotal !== null) {
+      const itemsSum = data.items.reduce((sum, item) => sum + item.price, 0);
+      const diff = Math.abs(itemsSum - data.subtotal);
+
+      if (diff > 0.02) {
+        // Allow 2 cent tolerance for rounding
+        setValidationError(
+          `Items sum to $${itemsSum.toFixed(2)} but subtotal is $${data.subtotal.toFixed(2)}. Please review and correct.`
+        );
+        setState('review');
+        return;
+      }
+    }
+
+    // Auto-save if valid
+    if (data.items.length > 0) {
+      await saveItems(data);
+    } else {
+      setError('No items found in receipt');
+      setState('error');
+    }
+  };
+
+  const processImage = async (file: File) => {
+    startProcessing();
 
     try {
       const provider = getOCRProvider();
       const data = await provider.extractReceipt(file);
-
-      setReceiptData(data);
-
-      // Validate: items should sum to subtotal
-      if (data.items.length > 0 && data.subtotal !== null) {
-        const itemsSum = data.items.reduce((sum, item) => sum + item.price, 0);
-        const diff = Math.abs(itemsSum - data.subtotal);
-
-        if (diff > 0.02) {
-          // Allow 2 cent tolerance for rounding
-          setValidationError(
-            `Items sum to $${itemsSum.toFixed(2)} but subtotal is $${data.subtotal.toFixed(2)}. Please review and correct.`
-          );
-          setState('review');
-          return;
-        }
-      }
-
-      // Auto-save if valid
-      if (data.items.length > 0) {
-        await saveItems(data);
-      } else {
-        setError('No items found in receipt');
-        setState('error');
-      }
+      await reviewOrSave(data);
     } catch (err) {
       console.error('OCR error:', err);
       setError('Failed to process receipt. Please try again or add items manually.');
       setState('error');
       onError?.('Failed to process receipt');
     }
+  };
+
+  // Reads a Toast receipt link on the server. The link is a bearer link to the receipt, so it is
+  // neither logged nor saved; only the parsed items are.
+  const handleLinkSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const url = link.trim();
+    if (!url) return;
+
+    startProcessing();
+    let reason = "Couldn't read that receipt link";
+
+    try {
+      const response = await fetch('/api/receipt-link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      });
+      const data = await response.json();
+
+      if (response.ok) {
+        setLink('');
+        await reviewOrSave(data as ReceiptData);
+        return;
+      }
+      if (typeof data.error === 'string') {
+        reason = data.error;
+      }
+    } catch {
+      // Network failure or a non-JSON reply: keep the generic reason
+    }
+
+    setError(`${reason}. Use a photo instead.`);
+    setState('error');
+    onError?.('Failed to read receipt link');
   };
 
   const saveItems = async (data: ReceiptData) => {
@@ -124,6 +167,7 @@ export function ReceiptUploader({
     setReceiptData(null);
     setError(null);
     setValidationError(null);
+    setLink('');
   };
 
   // Hidden file inputs
@@ -172,6 +216,25 @@ export function ReceiptUploader({
             Photos
           </button>
         </div>
+        <form onSubmit={handleLinkSubmit} className="flex gap-2">
+          <input
+            type="url"
+            inputMode="url"
+            autoComplete="off"
+            value={link}
+            onChange={(e) => setLink(e.target.value)}
+            placeholder="Paste a Toast receipt link"
+            aria-label="Toast receipt link"
+            className="min-w-0 flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          />
+          <button
+            type="submit"
+            disabled={!link.trim()}
+            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Add
+          </button>
+        </form>
         <button
           onClick={handleCancel}
           className="w-full text-sm text-gray-500 hover:text-gray-700"
