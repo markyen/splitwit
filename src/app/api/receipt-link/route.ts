@@ -1,12 +1,33 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { parseToastReceipt, ReceiptParseError } from '@/services/receipt-link/toast';
+import type { ReceiptData } from '@/types';
+import { ReceiptParseError } from '@/services/receipt-link/html';
+import { parseSquareReceipt } from '@/services/receipt-link/square';
+import { parseToastReceipt } from '@/services/receipt-link/toast';
 
-// Reads a Toast receipt link server-side (Toast sends no CORS headers). The link is a bearer
-// link to someone's receipt: it is never logged or stored, and errors name only the failing step.
+// Reads a Toast or Square receipt link server-side (neither sends CORS headers). The link is a
+// bearer link to someone's receipt: it is never logged or stored, and errors name only the failing
+// step.
 
-// Matched in full, so any other scheme, host, port, userinfo, query, fragment or path is refused.
-// Ids are base64url (a 22-character id is a 128-bit value), which can't hold "/", "." or "%".
-const TOAST_RECEIPT_LINK = /^https:\/\/www\.toasttab\.com\/receipts\/([A-Za-z0-9_-]{1,64})\/([A-Za-z0-9_-]{1,64})$/;
+// Each link is matched in full, so any other scheme, host, port, userinfo, fragment or path is
+// refused, and only the page's own address, rebuilt from the ids, is fetched. Ids are base64url
+// (a 22-character id is a 128-bit value), which can't hold "/", "." or "%". A Square link sent by
+// text carries a query ("?sms=1"); it is accepted in plain characters and left off the fetch.
+const RECEIPT_LINKS: {
+  pattern: RegExp;
+  page: (ids: string[]) => string;
+  parse: (html: string) => ReceiptData;
+}[] = [
+  {
+    pattern: /^https:\/\/www\.toasttab\.com\/receipts\/([A-Za-z0-9_-]{1,64})\/([A-Za-z0-9_-]{1,64})$/,
+    page: ([receipt, check]) => `https://www.toasttab.com/receipts/${receipt}/${check}`,
+    parse: parseToastReceipt,
+  },
+  {
+    pattern: /^https:\/\/squareup\.com\/r\/([A-Za-z0-9_-]{1,64})(?:\?[A-Za-z0-9_=&-]{1,200})?$/,
+    page: ([receipt]) => `https://squareup.com/r/${receipt}`,
+    parse: parseSquareReceipt,
+  },
+];
 
 const FETCH_TIMEOUT_MS = 10_000;
 const MAX_BODY_BYTES = 1_000_000;
@@ -22,13 +43,15 @@ class StepError extends Error {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json().catch(() => null);
-    const match = typeof body?.url === 'string' ? TOAST_RECEIPT_LINK.exec(body.url) : null;
-    if (!match) {
-      throw new StepError('Not a Toast receipt link', 400);
+    const url = typeof body?.url === 'string' ? body.url : '';
+    const link = RECEIPT_LINKS.find(({ pattern }) => pattern.test(url));
+    const match = link?.pattern.exec(url);
+    if (!link || !match) {
+      throw new StepError('Not a Toast or Square receipt link', 400);
     }
 
-    const html = await fetchReceiptPage(`https://www.toasttab.com/receipts/${match[1]}/${match[2]}`);
-    return NextResponse.json(parseToastReceipt(html));
+    const html = await fetchReceiptPage(link.page(match.slice(1)));
+    return NextResponse.json(link.parse(html));
   } catch (error) {
     let message = "Couldn't read the receipt page";
     let status = 500;

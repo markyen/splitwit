@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { POST } from './route';
 import { row, spacer, toastReceiptPage } from '@/test/toastReceipt';
+import { lineItem, squareReceiptPage, totals, totalsRow } from '@/test/squareReceipt';
 
 const LINK = 'https://www.toasttab.com/receipts/TestReceiptId0000000000/TestCheckId00';
 
@@ -13,6 +14,15 @@ const PAGE = toastReceiptPage([
   row('Tax', '$1.00'),
   row('Total', '$11.00'),
 ].join('\n'));
+
+const SQUARE_LINK = 'https://squareup.com/r/TestSquareId00000000000';
+
+const SQUARE_PAGE = squareReceiptPage(
+  [
+    lineItem('Item B', '$20.00'),
+    totals([totalsRow('Purchase Subtotal', '$20.00'), totalsRow('Tip', '$4.00'), totalsRow('Total', '$24.00')].join('')),
+  ].join('')
+);
 
 const fetchMock = vi.fn<typeof fetch>();
 
@@ -69,6 +79,53 @@ describe('POST /api/receipt-link', () => {
     expect(fetchMock.mock.calls[0][0]).toBe(link);
   });
 
+  it('fetches a Square link\'s page without its query and returns the parsed receipt', async () => {
+    fetchMock.mockImplementation(async () => htmlResponse(SQUARE_PAGE));
+
+    for (const url of [SQUARE_LINK, `${SQUARE_LINK}?sms=1`]) {
+      const response = await post({ url });
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        items: [{ name: 'Item B', price: 20 }],
+        subtotal: 20,
+        total: 24,
+      });
+    }
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([SQUARE_LINK, SQUARE_LINK]);
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({ redirect: 'manual', cache: 'no-store' });
+  });
+
+  it('reads a Toast page with the Toast parser and a Square page with the Square parser', async () => {
+    fetchMock.mockResolvedValue(htmlResponse(PAGE));
+    expect((await post({ url: SQUARE_LINK })).status).toBe(422);
+
+    fetchMock.mockResolvedValue(htmlResponse(SQUARE_PAGE));
+    expect((await post({ url: LINK })).status).toBe(422);
+  });
+
+  it.each([
+    ['another scheme', 'http://squareup.com/r/AbC123'],
+    ['another host', 'https://www.squareup.com/r/AbC123'],
+    ['a lookalike host', 'https://squareup.com.example.com/r/AbC123'],
+    ['a port', 'https://squareup.com:443/r/AbC123'],
+    ['userinfo', 'https://user@squareup.com/r/AbC123'],
+    ['another path', 'https://squareup.com/receipts/AbC123'],
+    ['an extra path', 'https://squareup.com/r/AbC123/more'],
+    ['a trailing slash', 'https://squareup.com/r/AbC123/'],
+    ['a missing id', 'https://squareup.com/r/'],
+    ['an encoded path', 'https://squareup.com/r/%2E%2E'],
+    ['an empty query', 'https://squareup.com/r/AbC123?'],
+    ['a query with other characters', 'https://squareup.com/r/AbC123?next=/x'],
+    ['a fragment', 'https://squareup.com/r/AbC123?sms=1#x'],
+  ])('refuses a Square link with %s', async (_case, url) => {
+    const response = await post({ url });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: 'Not a Toast or Square receipt link' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['another scheme', 'http://www.toasttab.com/receipts/AbC123/XyZ789'],
     ['another host', 'https://toasttab.com/receipts/AbC123/XyZ789'],
@@ -89,7 +146,7 @@ describe('POST /api/receipt-link', () => {
     const response = await post({ url });
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'Not a Toast receipt link' });
+    expect(await response.json()).toEqual({ error: 'Not a Toast or Square receipt link' });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -225,9 +282,13 @@ describe('POST /api/receipt-link', () => {
       await post({ url: LINK });
     }
     await post({ url: `${LINK}?leak=1` });
+    fetchMock.mockResolvedValueOnce(htmlResponse(SQUARE_PAGE.replace('$24.00', 'none')));
+    await post({ url: `${SQUARE_LINK}?sms=1` });
 
     const logged = JSON.stringify(spies.flatMap((spy) => spy.mock.calls));
     expect(logged).not.toContain('TestReceiptId');
+    expect(logged).not.toContain('TestSquareId');
+    expect(logged).not.toContain('Item B');
     expect(logged).not.toContain('Item A');
     expect(logged).not.toContain('Test Bistro');
   });

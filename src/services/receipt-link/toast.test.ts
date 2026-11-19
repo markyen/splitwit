@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
-import { parseToastReceipt, decodeEntities } from './toast';
+import { parseToastReceipt } from './toast';
+import { decodeEntities } from './html';
 import { modifier, payment, row, spacer, toastReceiptPage } from '@/test/toastReceipt';
 
 const totals = (subtotal: string, tax: string, tip: string | null, total: string) =>

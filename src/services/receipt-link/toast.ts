@@ -1,4 +1,5 @@
 import type { ReceiptData } from '@/types';
+import { decodeEntities, readRows, ReceiptParseError, toCents } from './html';
 
 // Parses the receipt page behind a Toast receipt link. The page is server-rendered: a two-column
 // table inside .receipt-body holding, in order, the header rows, item rows ("name | $price", a
@@ -6,76 +7,18 @@ import type { ReceiptData } from '@/types';
 // "- $x.xx", the totals block ("… Subtotal", "Discount Total", "Subtotal", "Tax", "Tip", "Total")
 // and then the payment rows. Reading stops at "Total", so payment rows are never parsed.
 
-export class ReceiptParseError extends Error {}
-
 interface Line {
   name: string;
   cents: number;
 }
 
-const NAMED_ENTITIES = new Map([
-  ['amp', '&'],
-  ['lt', '<'],
-  ['gt', '>'],
-  ['quot', '"'],
-  ['apos', "'"],
-  ['nbsp', '\u00a0'],
-]);
-
-export function decodeEntities(text: string): string {
-  return text.replace(/&(?:#(\d+)|#x([0-9a-f]+)|([a-z]+));/gi, (entity, dec, hex, name) => {
-    if (name) return NAMED_ENTITIES.get(name) ?? entity;
-    const code = dec ? parseInt(dec, 10) : parseInt(hex, 16);
-    return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : entity;
-  });
-}
-
-// Comments, or a start/end tag whose quoted attribute values may contain ">"
-const TAG = /<!--[\s\S]*?-->|<(\/?)([a-z][a-z0-9]*)(?:"[^"]*"|'[^']*'|[^'"<>])*>/gi;
-
-// Splits the first table after .receipt-body into rows of raw cell HTML. End tags are optional,
-// as in HTML: a new <tr> or <td> closes the open one.
-function readRows(html: string): string[][] {
+// Reads the first table after .receipt-body
+function readReceiptRows(html: string): string[][] {
   const start = html.search(/class\s*=\s*["'][^"']*\breceipt-body\b/i);
   if (start < 0) {
     throw new ReceiptParseError('Receipt table not found');
   }
-
-  const rows: string[][] = [];
-  let row: string[] | null = null;
-  let cell: string | null = null;
-  let textStart = start;
-
-  const closeCell = () => {
-    if (row && cell !== null) row.push(cell);
-    cell = null;
-  };
-  const closeRow = () => {
-    closeCell();
-    if (row) rows.push(row);
-    row = null;
-  };
-
-  TAG.lastIndex = start;
-  for (let match = TAG.exec(html); match; match = TAG.exec(html)) {
-    if (cell !== null) cell += html.slice(textStart, match.index);
-    textStart = TAG.lastIndex;
-
-    const name = match[2]?.toLowerCase();
-    const isEnd = match[1] === '/';
-    if (name === 'table' && isEnd) break;
-    if (name === 'tr') {
-      closeRow();
-      if (!isEnd) row = [];
-    } else if (name === 'td' || name === 'th') {
-      closeCell();
-      if (!isEnd) cell = '';
-    } else if (name === 'br' && cell !== null) {
-      cell += ' ';
-    }
-  }
-  closeRow();
-  return rows;
+  return readRows(html, start);
 }
 
 // A cell's text, and whether it starts with &nbsp; (how the page indents modifier rows)
@@ -87,15 +30,6 @@ function readCell(raw: string): { text: string; indented: boolean } {
   };
 }
 
-const PRICE = /^(-)?\s*\$(\d{1,3}(?:,\d{3})*|\d+)\.(\d{2})$/;
-
-function toCents(text: string): number | null {
-  const match = PRICE.exec(text);
-  if (!match) return null;
-  const cents = Number(match[2].replace(/,/g, '')) * 100 + Number(match[3]);
-  return match[1] ? -cents : cents;
-}
-
 export function parseToastReceipt(html: string): ReceiptData {
   const lines: Line[] = [];
   let item: Line | null = null; // the item that following modifiers belong to
@@ -103,7 +37,7 @@ export function parseToastReceipt(html: string): ReceiptData {
   let subtotal: number | null = null;
   let total: number | null = null;
 
-  for (const cells of readRows(html)) {
+  for (const cells of readReceiptRows(html)) {
     if (cells.length !== 2) continue;
 
     const label = readCell(cells[0]);

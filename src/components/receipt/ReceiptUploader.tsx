@@ -101,8 +101,8 @@ export function ReceiptUploader({
     }
   };
 
-  // Reads a Toast receipt link on the server. The link is a bearer link to the receipt, so it is
-  // neither logged nor saved; only the parsed items are.
+  // Reads a Toast or Square receipt link on the server. The link is a bearer link to the receipt,
+  // so it is neither logged nor saved; only the parsed items are.
   const handleLinkSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const url = link.trim();
@@ -223,8 +223,8 @@ export function ReceiptUploader({
             autoComplete="off"
             value={link}
             onChange={(e) => setLink(e.target.value)}
-            placeholder="Paste a Toast receipt link"
-            aria-label="Toast receipt link"
+            placeholder="Paste a Toast or Square receipt link"
+            aria-label="Toast or Square receipt link"
             className="min-w-0 flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
           />
           <button
