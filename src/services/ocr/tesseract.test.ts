@@ -134,12 +134,6 @@ describe('TesseractProvider', () => {
       expect(result.total).toBe(10.80);
     });
 
-    it('includes raw text in result', () => {
-      const text = 'Coffee $4.50';
-      const result = parseReceiptText(text);
-      expect(result.raw).toBe(text);
-    });
-
     it('handles empty text', () => {
       const result = parseReceiptText('');
       expect(result.items).toHaveLength(0);

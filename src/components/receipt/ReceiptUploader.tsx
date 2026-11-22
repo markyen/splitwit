@@ -3,6 +3,7 @@
 import { useState, useRef } from 'react';
 import { getOCRProvider } from '@/services/ocr';
 import { addLineItemsBatch } from '@/services/expenses';
+import { postWithHash } from '@/services/post';
 import { ReceiptData } from '@/types';
 
 interface ReceiptUploaderProps {
@@ -91,7 +92,7 @@ export function ReceiptUploader({
 
     try {
       const provider = getOCRProvider();
-      const data = await provider.extractReceipt(file);
+      const data = await provider.extractReceipt(file, code);
       await reviewOrSave(data);
     } catch (err) {
       console.error('OCR error:', err);
@@ -112,11 +113,7 @@ export function ReceiptUploader({
     let reason = "Couldn't read that receipt link";
 
     try {
-      const response = await fetch('/api/receipt-link', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url }),
-      });
+      const response = await postWithHash('/api/receipt-link', { url });
       const data = await response.json();
 
       if (response.ok) {

@@ -1,0 +1,13 @@
+# The image is built from a clean tree; nothing local, secret or generated goes into its context
+.git
+node_modules
+.next
+out
+coverage
+.env*
+!.env.example
+.vercel
+*.pem
+*.log
+infra
+deploy/*.zip

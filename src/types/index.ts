@@ -37,7 +37,8 @@ export interface ReceiptData {
   items: ReceiptItem[];
   subtotal: number | null;
   total: number | null;
-  raw?: string; // raw OCR text for debugging
+  tax?: number;
+  tip?: number;
 }
 
 // UI state types

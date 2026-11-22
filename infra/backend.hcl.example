@@ -1,0 +1,7 @@
+# Copy to backend.hcl (gitignored) and fill in. deploy.sh passes it to `tofu init`.
+
+bucket       = "your-state-bucket"
+key          = "splitwit/terraform.tfstate"
+region       = "us-east-1"
+encrypt      = true
+use_lockfile = true

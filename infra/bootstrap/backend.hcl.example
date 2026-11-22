@@ -1,0 +1,8 @@
+# Copy to backend.hcl (gitignored) and fill in; pass it to `tofu init -backend-config=backend.hcl`.
+# The same state bucket as the main stack, under its own key.
+
+bucket       = "your-state-bucket"
+key          = "splitwit/bootstrap.tfstate"
+region       = "us-east-1"
+encrypt      = true
+use_lockfile = true

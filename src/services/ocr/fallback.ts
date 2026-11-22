@@ -12,13 +12,13 @@ export class FallbackOCRProvider implements OCRProvider {
     this.providers = providers;
   }
 
-  async extractReceipt(image: Blob): Promise<ReceiptData> {
+  async extractReceipt(image: Blob, code: string): Promise<ReceiptData> {
     let lastError: Error | null = null;
 
     for (const provider of this.providers) {
       try {
         console.log(`[OCR] Attempting extraction with ${provider.name}...`);
-        const result = await provider.extractReceipt(image);
+        const result = await provider.extractReceipt(image, code);
         console.log(`[OCR] Successfully extracted receipt with ${provider.name}`);
         return result;
       } catch (error) {
@@ -26,7 +26,7 @@ export class FallbackOCRProvider implements OCRProvider {
         console.warn(`[OCR] ${provider.name} failed: ${errorMessage}`);
         lastError = error instanceof Error ? error : new Error(errorMessage);
 
-        // Check if this is a quota/rate limit error from Azure
+        // Check if this is a quota/rate limit error
         if (this.isQuotaError(error)) {
           console.log(`[OCR] Quota exceeded for ${provider.name}, trying next provider...`);
           continue;

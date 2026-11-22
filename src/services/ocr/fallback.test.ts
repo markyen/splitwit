@@ -19,7 +19,6 @@ const mockReceiptData: ReceiptData = {
   items: [{ name: 'Coffee', price: 4.50 }],
   subtotal: 4.50,
   total: 4.86,
-  raw: 'Coffee $4.50',
 };
 
 describe('FallbackOCRProvider', () => {
@@ -28,7 +27,7 @@ describe('FallbackOCRProvider', () => {
     const fallback = createMockProvider('fallback', mockReceiptData);
 
     const provider = new FallbackOCRProvider([primary, fallback]);
-    const result = await provider.extractReceipt(new Blob());
+    const result = await provider.extractReceipt(new Blob(), 'ABCDEF');
 
     expect(result).toEqual(mockReceiptData);
     expect(primary.extractReceipt).toHaveBeenCalledTimes(1);
@@ -40,7 +39,7 @@ describe('FallbackOCRProvider', () => {
     const fallback = createMockProvider('fallback', mockReceiptData);
 
     const provider = new FallbackOCRProvider([primary, fallback]);
-    const result = await provider.extractReceipt(new Blob());
+    const result = await provider.extractReceipt(new Blob(), 'ABCDEF');
 
     expect(result).toEqual(mockReceiptData);
     expect(primary.extractReceipt).toHaveBeenCalledTimes(1);
@@ -52,7 +51,7 @@ describe('FallbackOCRProvider', () => {
     const fallback = createMockProvider('fallback', mockReceiptData);
 
     const provider = new FallbackOCRProvider([primary, fallback]);
-    const result = await provider.extractReceipt(new Blob());
+    const result = await provider.extractReceipt(new Blob(), 'ABCDEF');
 
     expect(result).toEqual(mockReceiptData);
     expect(fallback.extractReceipt).toHaveBeenCalled();
@@ -63,7 +62,7 @@ describe('FallbackOCRProvider', () => {
     const fallback = createMockProvider('fallback', mockReceiptData);
 
     const provider = new FallbackOCRProvider([primary, fallback]);
-    const result = await provider.extractReceipt(new Blob());
+    const result = await provider.extractReceipt(new Blob(), 'ABCDEF');
 
     expect(result).toEqual(mockReceiptData);
     expect(fallback.extractReceipt).toHaveBeenCalled();
@@ -74,7 +73,7 @@ describe('FallbackOCRProvider', () => {
     const fallback = createMockProvider('fallback', mockReceiptData);
 
     const provider = new FallbackOCRProvider([primary, fallback]);
-    const result = await provider.extractReceipt(new Blob());
+    const result = await provider.extractReceipt(new Blob(), 'ABCDEF');
 
     expect(result).toEqual(mockReceiptData);
     expect(fallback.extractReceipt).toHaveBeenCalled();
@@ -86,7 +85,7 @@ describe('FallbackOCRProvider', () => {
 
     const provider = new FallbackOCRProvider([primary, fallback]);
 
-    await expect(provider.extractReceipt(new Blob())).rejects.toThrow(
+    await expect(provider.extractReceipt(new Blob(), 'ABCDEF')).rejects.toThrow(
       'All OCR providers failed'
     );
   });
@@ -97,7 +96,7 @@ describe('FallbackOCRProvider', () => {
 
     const provider = new FallbackOCRProvider([primary, fallback]);
 
-    await expect(provider.extractReceipt(new Blob())).rejects.toThrow(
+    await expect(provider.extractReceipt(new Blob(), 'ABCDEF')).rejects.toThrow(
       'Fallback failed'
     );
   });
@@ -143,7 +142,7 @@ describe('FallbackOCRProvider', () => {
     };
 
     const provider = new FallbackOCRProvider([first, second, third]);
-    await provider.extractReceipt(new Blob());
+    await provider.extractReceipt(new Blob(), 'ABCDEF');
 
     expect(callOrder).toEqual(['first', 'second', 'third']);
   });

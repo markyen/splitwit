@@ -1,0 +1,6 @@
+{
+  "alert_email": "alerts@example.com",
+  "textract_monthly_limit_usd": "5",
+  "reserved_concurrency": null,
+  "keep_warm": true
+}

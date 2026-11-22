@@ -18,11 +18,8 @@ export class TesseractProvider implements OCRProvider {
       },
     });
 
-    const text = result.data.text;
-    console.log('Raw OCR text:', text);
-
     // Parse the text to extract receipt data
-    return this.parseReceiptText(text);
+    return this.parseReceiptText(result.data.text);
   }
 
   private async blobToDataUrl(blob: Blob): Promise<string> {
@@ -104,11 +101,6 @@ export class TesseractProvider implements OCRProvider {
       subtotal = items.reduce((sum, item) => sum + item.price, 0);
     }
 
-    return {
-      items,
-      subtotal,
-      total,
-      raw: text,
-    };
+    return { items, subtotal, total };
   }
 }

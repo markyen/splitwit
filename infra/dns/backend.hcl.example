@@ -1,0 +1,8 @@
+# Copy to backend.hcl (gitignored) and fill in. deploy.sh passes it to `tofu init`.
+# The same state bucket as the other stacks, under its own key.
+
+bucket       = "your-state-bucket"
+key          = "splitwit/dns.tfstate"
+region       = "us-east-1"
+encrypt      = true
+use_lockfile = true

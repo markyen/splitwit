@@ -1,7 +1,13 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // Security headers
+  // A self-contained server in .next/standalone, which the Lambda image runs with node server.js.
+  // The www to apex redirect is CloudFront's: the origin sees the function URL's host, not the
+  // viewer's, so a host rule here would never match.
+  output: "standalone",
+
+  // Security headers. The app is their only source (CloudFront passes them through and adds none),
+  // so HSTS and the rest are the same behind any CDN; src/test/securityHeaders.test.ts pins them.
   headers: async () => [
     {
       source: "/:path*",

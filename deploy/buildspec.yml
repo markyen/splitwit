@@ -1,0 +1,49 @@
+# CodeBuild: build the Lambda image from deploy/Dockerfile and push it under one immutable tag.
+#
+# From the project (infra/bootstrap): ECR_REPOSITORY_URL and the six NEXT_PUBLIC_FIREBASE_* values.
+# From each build (infra/deploy.sh, as a start-build override): IMAGE_TAG alone.
+# The tests run inside the image build, on the pinned Node, so a failing test stops the push.
+# Nothing here prints a variable's value: CodeBuild logs each command as written.
+
+version: 0.2
+
+env:
+  shell: bash
+
+phases:
+  pre_build:
+    commands:
+      - |
+        set -euo pipefail
+        [[ "${IMAGE_TAG:-}" =~ ^app-[0-9a-f]{12}-[0-9]{8}T[0-9]{6}Z$ ]] || { echo "IMAGE_TAG is not app-<sha12>-<UTC stamp>"; exit 1; }
+        [[ "${ECR_REPOSITORY_URL:-}" =~ ^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/splitwit$ ]] || { echo "ECR_REPOSITORY_URL is not this project's repository"; exit 1; }
+        for name in API_KEY AUTH_DOMAIN PROJECT_ID STORAGE_BUCKET MESSAGING_SENDER_ID APP_ID; do
+          var="NEXT_PUBLIC_FIREBASE_$name"
+          [[ -n "${!var:-}" ]] || { echo "$var is not set"; exit 1; }
+        done
+        docker buildx version
+        aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "${ECR_REPOSITORY_URL%%/*}"
+
+  build:
+    commands:
+      # Single-platform, with no attestation manifests: Lambda takes an image manifest, not an index
+      - |
+        set -euo pipefail
+        docker buildx build \
+          --platform linux/arm64 \
+          --provenance=false \
+          --sbom=false \
+          --file deploy/Dockerfile \
+          --build-arg NEXT_PUBLIC_FIREBASE_API_KEY \
+          --build-arg NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN \
+          --build-arg NEXT_PUBLIC_FIREBASE_PROJECT_ID \
+          --build-arg NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET \
+          --build-arg NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID \
+          --build-arg NEXT_PUBLIC_FIREBASE_APP_ID \
+          --tag "$ECR_REPOSITORY_URL:$IMAGE_TAG" \
+          --push \
+          .
+
+  post_build:
+    commands:
+      - docker logout "${ECR_REPOSITORY_URL%%/*}" || true
