@@ -244,7 +244,8 @@ web_acl_unsubscribed() {
 # month), check that it's gone, and stop. Never returns.
 drop_flat_rate_plan() {
   local reason attempt live dist
-  reason="$(grep -m1 'Error: ' "$WORK/apply.log" 2> /dev/null | sed 's/^[^A-Za-z]*//')"
+  # No apply log under --drop-flat-rate; grep's failure mustn't end the script (pipefail)
+  reason="$({ grep -m1 'Error: ' "$WORK/apply.log" 2> /dev/null || true; } | sed 's/^[^A-Za-z]*//')"
   say "the apply failed with the web ACL made and no active flat-rate subscription: ${reason:-see above}"
   say "removing the web ACL now, so that nothing bills for it"
   # Targeted, so that nothing the failed apply didn't make is planned here: the web ACL and the
@@ -257,7 +258,8 @@ drop_flat_rate_plan() {
   # apply deletes the web ACL before it updates the distribution. So the distribution lets go of it
   # first, and CloudFront finishes deploying that, then the web ACL (and any subscription left in
   # the state) goes.
-  if tf "$HERE" state list 2> /dev/null | grep -qx 'aws_cloudfront_distribution.site'; then
+  # grep reads all of the list (no -q), so an early exit can't fail tf with SIGPIPE under pipefail
+  if tf "$HERE" state list 2> /dev/null | grep -x 'aws_cloudfront_distribution.site' > /dev/null; then
     tf "$HERE" plan -input=false -lock=true -var-file=terraform.tfvars.json -var "image_digest=$live" \
       -var flat_rate_plan=false -target=aws_cloudfront_distribution.site -out="$WORK/drop1.plan" > "$WORK/drop-plan.log" 2>&1 ||
       { cat "$WORK/drop-plan.log"; die "THE WEB ACL IS STILL THERE: the plan to free it failed (above). Send us this output now."; }
