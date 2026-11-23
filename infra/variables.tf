@@ -89,3 +89,20 @@ variable "audit_tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "permissions_boundary_arn" {
+  description = <<-EOT
+    The ARN of a managed policy to set as the permissions boundary of splitwit's roles (splitwit-app,
+    splitwit-keep-warm, splitwit-budgets-action and splitwit-build, across infra/ and
+    infra/bootstrap/), for a deploy role that may make or change roles only with that boundary. null
+    sets none. Set it in both stacks' gitignored terraform.tfvars.json; deploy.sh --attach-boundary
+    applies it.
+  EOT
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.permissions_boundary_arn == null || can(regex("^arn:aws[a-z-]*:iam::[0-9]{12}:policy/.+$", var.permissions_boundary_arn))
+    error_message = "null, or an IAM managed policy ARN (arn:aws:iam::<account>:policy/<name>)."
+  }
+}

@@ -313,3 +313,40 @@ run "api_post_limit_refuses_below_waf_least" {
 
   expect_failures = [var.api_post_limit]
 }
+
+run "no_permissions_boundary_by_default" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for r in [aws_iam_role.app, aws_iam_role.keep_warm[0], aws_iam_role.budgets_action] : r.permissions_boundary == null
+    ])
+    error_message = "Without permissions_boundary_arn, no role has a permissions boundary."
+  }
+}
+
+run "permissions_boundary_on_every_role" {
+  command = plan
+
+  variables {
+    permissions_boundary_arn = "arn:aws:iam::000000000000:policy/example-boundary"
+  }
+
+  assert {
+    condition = alltrue([
+      for r in [aws_iam_role.app, aws_iam_role.keep_warm[0], aws_iam_role.budgets_action] :
+      r.permissions_boundary == "arn:aws:iam::000000000000:policy/example-boundary"
+    ])
+    error_message = "With permissions_boundary_arn set, splitwit-app, splitwit-keep-warm and splitwit-budgets-action carry it."
+  }
+}
+
+run "permissions_boundary_refuses_a_role_arn" {
+  command = plan
+
+  variables {
+    permissions_boundary_arn = "arn:aws:iam::000000000000:role/splitwit-app"
+  }
+
+  expect_failures = [var.permissions_boundary_arn]
+}

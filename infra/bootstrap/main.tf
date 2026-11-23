@@ -216,6 +216,7 @@ resource "aws_iam_role" "build" {
   description          = "CodeBuild's role for splitwit-build: read a source zip, push the image to the splitwit repository"
   assume_role_policy   = data.aws_iam_policy_document.build_trust.json
   max_session_duration = 3600
+  permissions_boundary = var.permissions_boundary_arn
 }
 
 data "aws_iam_policy_document" "build" {

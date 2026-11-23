@@ -170,6 +170,9 @@ npm run test:run
 # The CloudFront redirect function
 node --test infra/cdn/www-redirect.test.mjs
 
+# infra/deploy.sh, offline, with stubs for aws, tofu, git, curl and dig
+node --test infra/deploy.test.mjs
+
 # The OpenTofu stacks, offline (no AWS access needed)
 (cd infra && tofu init -backend=false && tofu test)
 (cd infra/bootstrap && tofu init -backend=false && tofu test)
@@ -234,6 +237,17 @@ the site's own DNS reaches CloudFront yet.
 After that, every deploy is `infra/deploy.sh`. To go back, `infra/deploy.sh --digest sha256:...`
 deploys an image already in ECR without a build; the repository keeps the last 10. If an apply
 fails because a role made moments before isn't visible to AWS yet, run the same command again.
+
+A deploy runner can run the same script without a person: `DEPLOY_NONINTERACTIVE=1` with
+`AWS_PROFILE=splitwit-deploy`, a deploy role whose profile is in the runner's own
+`AWS_CONFIG_FILE`. Nothing is asked. A plan that passes its mode's checks is applied, and any other
+ends with `RESULT: REFUSED (...)` and nothing applied. Runner mode refuses `--state` and any IAM
+change the deploy role may not make, and the `--dns` steps read the Cloudflare token from the file
+`CLOUDFLARE_API_TOKEN_FILE` names. A deploy role that may make or change the site's roles only
+with a permissions boundary needs that boundary on them first: set `permissions_boundary_arn` in
+`infra/terraform.tfvars.json` and `infra/bootstrap/terraform.tfvars.json`, then run
+`infra/deploy.sh --attach-boundary`, which applies a plan only if it changes nothing but the
+boundary of `splitwit-app`, `splitwit-keep-warm`, `splitwit-budgets-action` and `splitwit-build`.
 
 ## License
 

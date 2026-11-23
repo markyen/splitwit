@@ -77,6 +77,7 @@ resource "aws_iam_role" "budgets_action" {
   description          = "Assumed by AWS Budgets to attach splitwit-ocr-stop to splitwit-app"
   assume_role_policy   = data.aws_iam_policy_document.budgets_trust.json
   max_session_duration = 3600
+  permissions_boundary = var.permissions_boundary_arn
 }
 
 data "aws_iam_policy_document" "budgets_action" {

@@ -34,6 +34,7 @@ resource "aws_iam_role" "app" {
   description          = "The splitwit function's execution role: its own logs and Textract AnalyzeExpense"
   assume_role_policy   = data.aws_iam_policy_document.app_trust.json
   max_session_duration = 3600
+  permissions_boundary = var.permissions_boundary_arn
 }
 
 # Textract has no resource ARNs, so its one action is allowed on "*". The Budgets stop attaches a
@@ -120,6 +121,7 @@ resource "aws_iam_role" "keep_warm" {
   description          = "Assumed by EventBridge Scheduler to invoke the splitwit function every 5 minutes"
   assume_role_policy   = data.aws_iam_policy_document.keep_warm_trust.json
   max_session_duration = 3600
+  permissions_boundary = var.permissions_boundary_arn
 }
 
 data "aws_iam_policy_document" "keep_warm" {

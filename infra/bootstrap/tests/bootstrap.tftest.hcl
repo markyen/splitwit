@@ -222,3 +222,35 @@ run "hostnames_must_be_apex_then_www" {
 
   expect_failures = [var.hostnames]
 }
+
+run "no_permissions_boundary_by_default" {
+  command = plan
+
+  assert {
+    condition     = aws_iam_role.build.permissions_boundary == null
+    error_message = "Without permissions_boundary_arn, the build role has no permissions boundary."
+  }
+}
+
+run "permissions_boundary_on_the_build_role" {
+  command = plan
+
+  variables {
+    permissions_boundary_arn = "arn:aws:iam::000000000000:policy/example-boundary"
+  }
+
+  assert {
+    condition     = aws_iam_role.build.permissions_boundary == "arn:aws:iam::000000000000:policy/example-boundary"
+    error_message = "With permissions_boundary_arn set, splitwit-build carries it."
+  }
+}
+
+run "permissions_boundary_refuses_a_role_arn" {
+  command = plan
+
+  variables {
+    permissions_boundary_arn = "arn:aws:iam::000000000000:role/splitwit-build"
+  }
+
+  expect_failures = [var.permissions_boundary_arn]
+}

@@ -14,6 +14,8 @@
 #   infra/deploy.sh --dns apply           infra/dns: plan and apply, the site pointing where it does
 #   infra/deploy.sh --dns cutover         infra/dns: point the apex and www at CloudFront
 #   infra/deploy.sh --dns rollback        infra/dns: point them back at Vercel
+#   infra/deploy.sh --attach-boundary     put permissions_boundary_arn (from each stack's tfvars)
+#                                         on the four roles, and change nothing else
 #   --allow-unpushed                      deploy a commit that is not on origin yet
 #   --allow-destroy                       go on even if the plan deletes or replaces something
 #
@@ -28,6 +30,16 @@
 # show the alert email and the account id. Nothing from the app runs here (no npm, no tests): the
 # build, tests included, runs in CodeBuild inside the image build. OpenTofu runs with an empty CLI
 # configuration, a fresh data directory and a read-only lock file.
+#
+# Runner mode, for a deploy runner instead of a person: DEPLOY_NONINTERACTIVE=1, with
+# AWS_PROFILE=splitwit-deploy (a profile in the runner's own AWS_CONFIG_FILE). Nothing is asked
+# and standard input isn't read. A plan that passes its mode's checks is applied without a "yes";
+# anything else ends with "RESULT: REFUSED (<reason>, log: <path>)", exit status 3, and nothing
+# applied. Runner mode does only what the deploy role may do: it refuses --state (the state bucket
+# is the admin's) and any plan that changes IAM beyond splitwit's four roles and their policies,
+# made or changed with a permissions boundary, without a change to who may assume a role, a role's
+# deletion, or a change to a managed policy's document. --dns reads the Cloudflare token from the
+# file named by CLOUDFLARE_API_TOKEN_FILE, and refuses without one.
 set -euo pipefail
 unset CDPATH
 umask 077
@@ -51,10 +63,11 @@ LOG="$LOG_DIR/deploy-$(date -u +%Y%m%d-%H%M%S).log"
 exec > >(tee -a "$LOG") 2>&1
 
 WORK=""
+REFUSED=no
 on_exit() {
   local code=$?
   [ -n "$WORK" ] && rm -rf "$WORK"
-  if [ "$code" -ne 0 ]; then
+  if [ "$code" -ne 0 ] && [ "$REFUSED" = no ]; then
     echo "RESULT: FAILED (exit $code, log: $LOG)"
   fi
 }
@@ -70,6 +83,55 @@ die() {
 say() {
   echo "deploy.sh: $*"
 }
+
+# Stop without applying anything, for a reason that a second run wouldn't change
+refuse() {
+  REFUSED=yes
+  echo "RESULT: REFUSED ($*, log: $LOG)"
+  exit 3
+}
+
+# --- what a plan may do (infra/deploy.test.mjs runs these against sample plans) ------------------
+
+# The roles the stacks make: infra/ makes the first three, infra/bootstrap/ the last
+ROLES='["aws_iam_role.app", "aws_iam_role.keep_warm[0]", "aws_iam_role.budgets_action", "aws_iam_role.build"]'
+
+# --attach-boundary: in-place updates of those roles in which permissions_boundary is the only
+# attribute that changes, to a policy ARN; nothing else changes, and nothing is imported
+ATTACH_ONLY='all(.resource_changes[]?; .change.importing == null and (
+  .change.actions == ["no-op"] or .change.actions == ["read"]
+  or (.mode == "managed" and .change.actions == ["update"] and (.address | IN($roles[]))
+    and (.change.after.permissions_boundary // "" | test("^arn:aws[a-z-]*:iam::[0-9]{12}:policy/."))
+    and (.change.before | del(.permissions_boundary)) == (.change.after | del(.permissions_boundary))
+    and ([.change.after_unknown // {} | .. | select(. == true)] | length) == 0)))'
+
+# True if every role the stack holds after the plan has a permissions boundary
+ROLES_BOUNDED='all(.planned_values.root_module.resources[]? | select(.type == "aws_iam_role"); (.values.permissions_boundary // "") != "")'
+
+# Runner mode: the addresses of IAM changes the deploy role may not make. It may make or change
+# splitwit's four roles only with a boundary, and never delete one or change who may assume it;
+# put a role's inline policy only on a role with a boundary; and make or delete a splitwit-*
+# managed policy, or change its tags, but not its document. Nothing else in IAM.
+IAM_BEYOND_DEPLOY_ROLE='([.planned_values.root_module.resources[]? | select(.type == "aws_iam_role")
+    | {key: .values.name, value: (.values.permissions_boundary // "")}] | from_entries) as $boundary
+  | .resource_changes[]?
+  | select(.mode == "managed" and (.type | startswith("aws_iam_")) and .change.actions != ["no-op"] and .change.actions != ["read"])
+  | select((.change.importing == null and (
+      if .type == "aws_iam_role" then
+        (.change.actions | index("delete")) == null
+        and (.change.after.name | IN("splitwit-app", "splitwit-keep-warm", "splitwit-budgets-action", "splitwit-build"))
+        and (.change.after.permissions_boundary // "") != ""
+        and (.change.actions == ["create"] or .change.before.assume_role_policy == .change.after.assume_role_policy)
+      elif .type == "aws_iam_role_policy" then
+        .change.actions == ["delete"]
+        or (if .change.after.role == null then ($boundary | length > 0 and all(.[]; . != ""))
+            else ($boundary[.change.after.role] // "") != "" end)
+      elif .type == "aws_iam_policy" then
+        .change.actions == ["delete"]
+        or (.change.actions == ["create"] and (.change.after.name | startswith("splitwit-")))
+        or (.change.actions == ["update"] and .change.before.policy == .change.after.policy)
+      else false end)) | not)
+  | .address'
 
 # --- arguments ---------------------------------------------------------------------------------
 
@@ -107,6 +169,10 @@ while [ $# -gt 0 ]; do
       MODE=drop-flat-rate
       shift
       ;;
+    --attach-boundary)
+      MODE=attach-boundary
+      shift
+      ;;
     --dns)
       [ $# -ge 2 ] || die "--dns needs adopt, apply, cutover or rollback"
       MODE=dns
@@ -130,21 +196,53 @@ if [ "$MODE" = dns ]; then
   case "$DNS_MODE" in adopt | apply | cutover | rollback) ;; *) die "--dns takes adopt, apply, cutover or rollback" ;; esac
   [ "$ALLOW_DESTROY" = no ] || die "--allow-destroy doesn't apply to --dns: each mode allows its own changes"
 fi
+[ "$MODE" != attach-boundary ] || [ "$ALLOW_DESTROY" = no ] || die "--allow-destroy doesn't apply to --attach-boundary"
 
-say "started $(date -u +%Y-%m-%dT%H:%M:%SZ), mode $MODE${DNS_MODE:+ $DNS_MODE}, log $LOG"
+case "${DEPLOY_NONINTERACTIVE:-}" in
+  "") RUNNER=no ;;
+  1) RUNNER=yes ;;
+  *) die "DEPLOY_NONINTERACTIVE is 1 (runner mode) or unset, not '$DEPLOY_NONINTERACTIVE'" ;;
+esac
+DEPLOY_PROFILE=splitwit-deploy
+if [ "$RUNNER" = yes ]; then
+  # Nothing reads a person's answer, and no tool can wait for one
+  exec < /dev/null
+  export GIT_TERMINAL_PROMPT=0
+fi
+
+say "started $(date -u +%Y-%m-%dT%H:%M:%SZ), mode $MODE${DNS_MODE:+ $DNS_MODE}$([ "$RUNNER" = no ] || echo ", runner mode"), log $LOG"
 
 # --- preconditions -----------------------------------------------------------------------------
 
-[ -n "${AWS_PROFILE:-}" ] || die "AWS_PROFILE is empty; sign in with a profile first"
+if [ "$RUNNER" = yes ]; then
+  [ "${AWS_PROFILE:-}" = "$DEPLOY_PROFILE" ] ||
+    die "runner mode runs as the AWS profile $DEPLOY_PROFILE, not '${AWS_PROFILE:-}'"
+else
+  [ -n "${AWS_PROFILE:-}" ] || die "AWS_PROFILE is empty; sign in with a profile first"
+fi
 for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN; do
   [ -z "${!name:-}" ] || die "$name is set; this script runs with a profile only"
 done
 # Any TF_* variable can change which provider OpenTofu runs (TF_REATTACH_PROVIDERS skips the lock
 # check), its arguments, its logs, state encryption or the stack's inputs; AWS endpoint and CA
 # overrides would send the admin session somewhere else, and a CLOUDFLARE_* variable could hand the
-# provider another credential or endpoint. Refuse them all rather than pick.
-env_set="$(env | grep -E '^(TF_|AWS_ENDPOINT_URL|AWS_CA_BUNDLE|CLOUDFLARE_)' | cut -d= -f1 | tr '\n' ' ' || true)"
+# provider another credential or endpoint. Refuse them all rather than pick. Runner mode's one
+# exception names the file --dns reads the token from; it is unset once read.
+env_allowed='^$'
+[ "$RUNNER" = no ] || env_allowed='^CLOUDFLARE_API_TOKEN_FILE$'
+env_set="$(env | grep -E '^(TF_|AWS_ENDPOINT_URL|AWS_CA_BUNDLE|CLOUDFLARE_)' | cut -d= -f1 | grep -Ev "$env_allowed" | tr '\n' ' ' || true)"
 [ -z "$env_set" ] || die "unset these first: $env_set"
+
+if [ "$RUNNER" = yes ]; then
+  case "$MODE" in
+    state) refuse "--state makes the state bucket, which stays the admin's: run it without DEPLOY_NONINTERACTIVE" ;;
+    dns)
+      [ -f "${CLOUDFLARE_API_TOKEN_FILE:-}" ] && [ -r "$CLOUDFLARE_API_TOKEN_FILE" ] ||
+        refuse "--dns needs a Cloudflare API token, which runner mode reads from the file CLOUDFLARE_API_TOKEN_FILE names, and none is readable"
+      ;;
+  esac
+fi
+
 for tool in "$TF" aws git jq curl shasum; do
   command -v "$tool" > /dev/null || die "$tool is not installed"
 done
@@ -171,8 +269,8 @@ tf_init() {
 # Show the plan and list its changes; leaves its JSON in $WORK/plan.json
 show_plan() {
   local dir="$1" plan="$2"
-  tf "$dir" show -no-color "$plan"
-  tf "$dir" show -json "$plan" > "$WORK/plan.json"
+  tf "$dir" show -no-color "$plan" || die "couldn't show the plan in ${dir#"$REPO"/}"
+  tf "$dir" show -json "$plan" > "$WORK/plan.json" || die "couldn't read the plan in ${dir#"$REPO"/}"
   echo
   say "changes in ${dir#"$REPO"/}:"
   jq -r '.resource_changes[] | select(.change.actions != ["no-op"] or .change.importing != null)
@@ -188,19 +286,36 @@ confirm() {
   [ "$answer" = yes ]
 }
 
-# Show the plan's changes, stop on a delete or replace unless allowed, then ask for a typed yes.
-# Returns 0 to apply, 1 to stop without applying.
+# The go-ahead for a plan that passed its mode's checks: a typed yes, or in runner mode the checks
+# alone
+approve() {
+  if [ "$RUNNER" = yes ]; then
+    say "runner mode: the plan passed this mode's checks; applying it without a prompt"
+    return 0
+  fi
+  confirm
+}
+
+# Show the plan's changes, stop on a delete or replace unless allowed (and, in runner mode, on an
+# IAM change the deploy role may not make), then ask for a typed yes. Returns 0 to apply, 1 to stop
+# without applying. A plan that can't be read counts as one that deletes.
 review_plan() {
-  local dir="$1" plan="$2"
+  local dir="$1" plan="$2" beyond
   show_plan "$dir" "$plan"
-  if jq -e '[.resource_changes[] | select(.change.actions | index("delete"))] | length > 0' "$WORK/plan.json" > /dev/null; then
+  if [ "$RUNNER" = yes ]; then
+    beyond="$(jq -r "$IAM_BEYOND_DEPLOY_ROLE" "$WORK/plan.json")" || die "couldn't read the plan's IAM changes"
+    [ -z "$beyond" ] ||
+      refuse "the plan changes IAM beyond what $DEPLOY_PROFILE may do: $(printf '%s' "$beyond" | tr '\n' ' '); that stays the admin's"
+  fi
+  if ! jq -e 'all(.resource_changes[]?; (.change.actions | index("delete")) == null)' "$WORK/plan.json" > /dev/null; then
     if [ "$ALLOW_DESTROY" != yes ]; then
+      [ "$RUNNER" = no ] || refuse "the plan deletes or replaces something (above), and --allow-destroy wasn't given"
       say "the plan deletes or replaces something (above); stopping. Rerun with --allow-destroy only if that is intended."
       return 1
     fi
     say "the plan deletes or replaces something, and --allow-destroy was given."
   fi
-  confirm
+  approve
 }
 
 # On a failed apply, name the one failure that a second run fixes: IAM is eventually consistent,
@@ -322,8 +437,9 @@ caa_admits_amazon() {
 
 # Before anything that costs money. An account on AWS's Free plan can't take CloudFront's flat-rate
 # plans, and it closes when that plan expires unless upgraded: a decision about money, not this
-# script's. Bootstrap stops here too, since a Free-plan account would stop the deploy after it.
-if [ "$MODE" != dns ] && [ "$MODE" != check ]; then
+# script's. Bootstrap stops here too, since a Free-plan account would stop the deploy after it. A
+# profile that may not read the account's plan carries on as for a plan that can't be read.
+if [ "$MODE" != dns ] && [ "$MODE" != check ] && [ "$MODE" != attach-boundary ]; then
   set -- $(aws --region us-east-1 --no-cli-pager freetier get-account-plan-state \
     --query '[accountPlanType, accountPlanStatus, accountPlanExpirationDate]' --output text 2> "$WORK/plan-state.err" || true)
   case "${1:-}" in
@@ -438,8 +554,15 @@ if [ "$MODE" = dns ]; then
       die "$key is set by deploy.sh for each run; take it out of infra/dns/terraform.tfvars.json"
   done
 
-  read -r -s -p "Cloudflare API token for $APEX (input hidden): " CF_TOKEN || CF_TOKEN=""
-  echo
+  if [ "$RUNNER" = yes ]; then
+    # Read by the shell itself, so the token is in no program's arguments
+    CF_TOKEN="$(< "$CLOUDFLARE_API_TOKEN_FILE")" || CF_TOKEN=""
+    unset CLOUDFLARE_API_TOKEN_FILE
+    say "read the Cloudflare API token from the file CLOUDFLARE_API_TOKEN_FILE names"
+  else
+    read -r -s -p "Cloudflare API token for $APEX (input hidden): " CF_TOKEN || CF_TOKEN=""
+    echo
+  fi
   [[ "$CF_TOKEN" =~ ^[A-Za-z0-9_-]{40,}$ ]] || die "that isn't a Cloudflare API token"
   # GET from Cloudflare's API; the token reaches curl on its standard input, never its arguments
   cf() {
@@ -512,6 +635,7 @@ if [ "$MODE" = dns ]; then
     "$WORK/run.tfvars.json" > "$WORK/unmanaged.txt"
   if [ -s "$WORK/unmanaged.txt" ]; then
     cat "$WORK/unmanaged.txt"
+    [ "$RUNNER" = no ] || refuse "the zone has records (above) that infra/dns doesn't manage"
     die "the zone has records (above) that infra/dns doesn't manage; nothing was changed. Send us this list."
   fi
 
@@ -526,10 +650,11 @@ if [ "$MODE" = dns ]; then
         ((.address | startswith("cloudflare_dns_record.site[")) and (.change.actions == ["delete", "create"] or .change.actions == ["create"]))
         or ((.address | startswith("cloudflare_dns_record.vercel_extra[")) and .change.actions == (if $mode == "cutover" then ["delete"] else ["create"] end))))
       end' "$WORK/plan.json" > /dev/null; then
+    [ "$RUNNER" = no ] || refuse "the plan has changes (above) that --dns $DNS_MODE doesn't make"
     die "the plan has changes (above) that --dns $DNS_MODE doesn't make; nothing was changed. Send us this list."
   fi
 
-  if ! confirm; then
+  if ! approve; then
     echo "RESULT: ABORTED (nothing applied, log: $LOG)"
     exit 0
   fi
@@ -585,6 +710,48 @@ fi
 REGION="$(jq -r '.aws_region // "us-east-1"' "$HERE/terraform.tfvars.json")"
 [[ "$REGION" =~ ^[a-z]{2}(-[a-z]+)+-[0-9]$ ]] || die "aws_region in terraform.tfvars.json is not a region: $REGION"
 AWS=(aws --region "$REGION" --no-cli-pager)
+
+# --- the permissions boundary on the four roles ------------------------------------------------
+# Both stacks are planned with permissions_boundary_arn from their own terraform.tfvars.json, and
+# applied only if neither plan changes anything but those roles' boundary.
+if [ "$MODE" = attach-boundary ]; then
+  BOOT="$HERE/bootstrap"
+  [ -f "$BOOT/terraform.tfvars.json" ] || die "infra/bootstrap/terraform.tfvars.json is missing (copy the .example)"
+  tf_init "$BOOT"
+  tf_init "$HERE"
+  # The image the stack runs now, so that the function's plan is unchanged
+  DIGEST="$(tf "$HERE" output -json | jq -r '.image_uri.value // "" | sub(".*@"; "")')"
+  [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || die "the main stack has no image yet; deploy first"
+  tf "$BOOT" plan -input=false -lock=true -var-file=terraform.tfvars.json -out="$WORK/boot.plan"
+  tf "$HERE" plan -input=false -lock=true -var-file=terraform.tfvars.json -var "image_digest=$DIGEST" -out="$WORK/main.plan"
+  for stack in boot main; do
+    if [ "$stack" = boot ]; then dir="$BOOT"; else dir="$HERE"; fi
+    show_plan "$dir" "$WORK/$stack.plan"
+    cp "$WORK/plan.json" "$WORK/$stack-plan.json"
+    jq -e --argjson roles "$ROLES" "$ATTACH_ONLY" "$WORK/plan.json" > /dev/null ||
+      refuse "the plan in ${dir#"$REPO"/} changes more than the roles' permissions boundary (above)"
+    jq -e "$ROLES_BOUNDED" "$WORK/plan.json" > /dev/null ||
+      die "a role in ${dir#"$REPO"/} would have no permissions boundary: set permissions_boundary_arn in its terraform.tfvars.json (see the .example)"
+  done
+  if jq -s -e 'all(.[].resource_changes[]?; .change.actions != ["update"])' "$WORK/boot-plan.json" "$WORK/main-plan.json" > /dev/null; then
+    say "every role has its permissions boundary already; nothing to apply"
+    echo "RESULT: OK (log: $LOG)"
+    exit 0
+  fi
+  if ! approve; then
+    echo "RESULT: ABORTED (nothing applied, log: $LOG)"
+    exit 0
+  fi
+  for stack in boot main; do
+    if [ "$stack" = boot ]; then dir="$BOOT"; else dir="$HERE"; fi
+    jq -e 'any(.resource_changes[]?; .change.actions == ["update"])' "$WORK/$stack-plan.json" > /dev/null || continue
+    apply_plan "$dir" "$WORK/$stack.plan"
+  done
+  say "the permissions boundary is on: $(jq -r '.planned_values.root_module.resources[]? | select(.type == "aws_iam_role") | .values.name' \
+    "$WORK/boot-plan.json" "$WORK/main-plan.json" | tr '\n' ' ')"
+  echo "RESULT: OK (log: $LOG)"
+  exit 0
+fi
 
 # --- recovery: a web ACL left in the state without a flat-rate subscription ---------------------
 if [ "$MODE" = drop-flat-rate ]; then
