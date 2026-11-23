@@ -254,27 +254,27 @@ drop_flat_rate_plan() {
   live="$("${AWS[@]}" lambda get-function --function-name "$FUNCTION" --query 'Code.ResolvedImageUri' --output text 2> /dev/null || true)"
   live="${live##*@}"
   [[ "$live" =~ ^sha256:[0-9a-f]{64}$ ]] || live="$DIGEST"
-  # Two applies, because WAF refuses to delete a web ACL that CloudFront still holds, and a single
-  # apply deletes the web ACL before it updates the distribution. So the distribution lets go of it
-  # first, and CloudFront finishes deploying that, then the web ACL (and any subscription left in
-  # the state) goes.
-  # grep reads all of the list (no -q), so an early exit can't fail tf with SIGPIPE under pipefail
-  if tf "$HERE" state list 2> /dev/null | grep -x 'aws_cloudfront_distribution.site' > /dev/null; then
-    tf "$HERE" plan -input=false -lock=true -var-file=terraform.tfvars.json -var "image_digest=$live" \
-      -var flat_rate_plan=false -target=aws_cloudfront_distribution.site -out="$WORK/drop1.plan" > "$WORK/drop-plan.log" 2>&1 ||
-      { cat "$WORK/drop-plan.log"; die "THE WEB ACL IS STILL THERE: the plan to free it failed (above). Send us this output now."; }
-    tf "$HERE" show -json "$WORK/drop1.plan" > "$WORK/drop1.json"
-    jq -r '.resource_changes[] | select(.change.actions != ["no-op"] and .change.actions != ["read"]) | "  \(.change.actions | join("+")) \(.address)"' "$WORK/drop1.json"
-    jq -e 'all(.resource_changes[] | select(.change.actions != ["no-op"] and .change.actions != ["read"]);
-      .address == "aws_cloudfront_distribution.site" and .change.actions == ["update"])' "$WORK/drop1.json" > /dev/null ||
-      die "THE WEB ACL IS STILL THERE: the plan to free it changes more than the distribution (above); nothing was applied. Send us this output now."
-    tf "$HERE" apply -input=false "$WORK/drop1.plan" 2>&1 | tee -a "$WORK/drop-apply.log" ||
-      die "THE WEB ACL IS STILL THERE: updating the distribution failed (above). Send us this output now."
-    dist="$(tf "$HERE" show -json | jq -r '.values.root_module.resources[]? | select(.address == "aws_cloudfront_distribution.site") | .values.id // empty')"
-    [[ "$dist" =~ ^E[A-Z0-9]+$ ]] || die "THE WEB ACL IS STILL THERE: couldn't read the distribution's id. Send us this output now."
-    say "waiting for CloudFront to deploy the distribution without the web ACL (usually 3 to 10 minutes)"
-    aws --region us-east-1 --no-cli-pager cloudfront wait distribution-deployed --id "$dist" ||
-      say "CloudFront hasn't finished yet; trying the delete anyway"
+  # WAF refuses to delete a web ACL that CloudFront still holds, and OpenTofu can't be made to let
+  # go of it first: it deletes the web ACL before it updates the distribution, and a plan targeting
+  # the distribution alone still brings in the web ACL's delete. So the distribution drops the web
+  # ACL through CloudFront's API, CloudFront finishes deploying that, and only then does OpenTofu
+  # delete the web ACL (and any subscription left in the state).
+  dist="$(tf "$HERE" show -json | jq -r '.values.root_module.resources[]? | select(.address == "aws_cloudfront_distribution.site") | .values.id // empty')"
+  if [ -n "$dist" ]; then
+    [[ "$dist" =~ ^E[A-Z0-9]+$ ]] || die "THE WEB ACL IS STILL THERE: the distribution's id in the state isn't one ($dist). Send us this output now."
+    CF=(aws --region us-east-1 --no-cli-pager cloudfront)
+    "${CF[@]}" get-distribution-config --id "$dist" > "$WORK/dist.json" ||
+      die "THE WEB ACL IS STILL THERE: couldn't read distribution $dist. Send us this output now."
+    if [ -n "$(jq -r '.DistributionConfig.WebACLId // ""' "$WORK/dist.json")" ]; then
+      jq '.DistributionConfig | .WebACLId = ""' "$WORK/dist.json" > "$WORK/dist-config.json"
+      "${CF[@]}" update-distribution --id "$dist" --if-match "$(jq -r '.ETag' "$WORK/dist.json")" \
+        --distribution-config "file://$WORK/dist-config.json" > /dev/null ||
+        die "THE WEB ACL IS STILL THERE: CloudFront refused to drop it from distribution $dist. Send us this output now."
+      say "distribution $dist no longer names the web ACL; waiting for CloudFront to deploy that (usually 3 to 10 minutes)"
+    else
+      say "distribution $dist already names no web ACL; waiting for CloudFront to finish deploying"
+    fi
+    "${CF[@]}" wait distribution-deployed --id "$dist" || say "CloudFront hasn't finished yet; trying the delete anyway"
   fi
   for attempt in 1 2 3; do
     tf "$HERE" plan -input=false -lock=true -var-file=terraform.tfvars.json -var "image_digest=$live" \
