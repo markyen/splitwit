@@ -529,7 +529,8 @@ if [ "$MODE" = dns ]; then
         got="$(dig +short +norecurse @"$ns" "$want" "$name" | sed 's/\.$//')"
         case "$type/$want/$proxied" in
           */true | CNAME/A/*) [ -n "$got" ] || missing="$missing $type:$name" ;;
-          CAA/*) printf '%s\n' "$got" | grep -qxF "0 $tag \"$value\"" || missing="$missing CAA:$value" ;;
+          # Cloudflare serves some CAs' records with parameters added ("pki.goog; cansignhttpexchanges=yes")
+          CAA/*) printf '%s\n' "$got" | sed -E 's/"([^";]+);[^"]*"$/"\1"/' | grep -qxF "0 $tag \"$value\"" || missing="$missing CAA:$value" ;;
           TXT/*) printf '%s\n' "$got" | grep -qxF "\"$content\"" || missing="$missing TXT:$name" ;;
           MX/*) printf '%s\n' "$got" | grep -qxF "$priority ${content%.}" || missing="$missing MX:$name" ;;
           *) printf '%s\n' "$got" | grep -qxF "${content%.}" || missing="$missing $type:$name" ;;
