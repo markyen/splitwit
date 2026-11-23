@@ -6,6 +6,7 @@
 #   infra/deploy.sh --branch NAME         the same from another branch
 #   infra/deploy.sh --digest sha256:HEX   no build: deploy an image already in ECR (a rollback)
 #   infra/deploy.sh --check               only the checks a deploy ends with (read-only)
+#   infra/deploy.sh --drop-flat-rate      remove a web ACL left without a flat-rate subscription
 #   infra/deploy.sh --state               once, first: the S3 bucket for the stacks' state, and
 #                                         the three backend.hcl files that name it
 #   infra/deploy.sh --bootstrap           plan and apply infra/bootstrap
@@ -100,6 +101,10 @@ while [ $# -gt 0 ]; do
       ;;
     --check)
       MODE=check
+      shift
+      ;;
+    --drop-flat-rate)
+      MODE=drop-flat-rate
       shift
       ;;
     --dns)
@@ -238,8 +243,8 @@ web_acl_unsubscribed() {
 # flat_rate_plan = false at once, so that no web ACL is left to bill on pay-as-you-go (about $6 a
 # month), check that it's gone, and stop. Never returns.
 drop_flat_rate_plan() {
-  local reason attempt live targets
-  reason="$(grep -m1 'Error: ' "$WORK/apply.log" | sed 's/^[^A-Za-z]*//')"
+  local reason attempt live dist
+  reason="$(grep -m1 'Error: ' "$WORK/apply.log" 2> /dev/null | sed 's/^[^A-Za-z]*//')"
   say "the apply failed with the web ACL made and no active flat-rate subscription: ${reason:-see above}"
   say "removing the web ACL now, so that nothing bills for it"
   # Targeted, so that nothing the failed apply didn't make is planned here: the web ACL and the
@@ -248,20 +253,37 @@ drop_flat_rate_plan() {
   live="$("${AWS[@]}" lambda get-function --function-name "$FUNCTION" --query 'Code.ResolvedImageUri' --output text 2> /dev/null || true)"
   live="${live##*@}"
   [[ "$live" =~ ^sha256:[0-9a-f]{64}$ ]] || live="$DIGEST"
-  for attempt in 1 2 3; do
-    targets=(-target=aws_wafv2_web_acl.site -target=aws_pricingplanmanager_subscription.site)
-    tf "$HERE" state list 2> /dev/null | grep -qx 'aws_cloudfront_distribution.site' &&
-      targets+=(-target=aws_cloudfront_distribution.site)
+  # Two applies, because WAF refuses to delete a web ACL that CloudFront still holds, and a single
+  # apply deletes the web ACL before it updates the distribution. So the distribution lets go of it
+  # first, and CloudFront finishes deploying that, then the web ACL (and any subscription left in
+  # the state) goes.
+  if tf "$HERE" state list 2> /dev/null | grep -qx 'aws_cloudfront_distribution.site'; then
     tf "$HERE" plan -input=false -lock=true -var-file=terraform.tfvars.json -var "image_digest=$live" \
-      -var flat_rate_plan=false "${targets[@]}" -out="$WORK/drop.plan" > "$WORK/drop-plan.log" 2>&1 || { cat "$WORK/drop-plan.log"; break; }
+      -var flat_rate_plan=false -target=aws_cloudfront_distribution.site -out="$WORK/drop1.plan" > "$WORK/drop-plan.log" 2>&1 ||
+      { cat "$WORK/drop-plan.log"; die "THE WEB ACL IS STILL THERE: the plan to free it failed (above). Send us this output now."; }
+    tf "$HERE" show -json "$WORK/drop1.plan" > "$WORK/drop1.json"
+    jq -r '.resource_changes[] | select(.change.actions != ["no-op"] and .change.actions != ["read"]) | "  \(.change.actions | join("+")) \(.address)"' "$WORK/drop1.json"
+    jq -e 'all(.resource_changes[] | select(.change.actions != ["no-op"] and .change.actions != ["read"]);
+      .address == "aws_cloudfront_distribution.site" and .change.actions == ["update"])' "$WORK/drop1.json" > /dev/null ||
+      die "THE WEB ACL IS STILL THERE: the plan to free it changes more than the distribution (above); nothing was applied. Send us this output now."
+    tf "$HERE" apply -input=false "$WORK/drop1.plan" 2>&1 | tee -a "$WORK/drop-apply.log" ||
+      die "THE WEB ACL IS STILL THERE: updating the distribution failed (above). Send us this output now."
+    dist="$(tf "$HERE" show -json | jq -r '.values.root_module.resources[]? | select(.address == "aws_cloudfront_distribution.site") | .values.id // empty')"
+    [[ "$dist" =~ ^E[A-Z0-9]+$ ]] || die "THE WEB ACL IS STILL THERE: couldn't read the distribution's id. Send us this output now."
+    say "waiting for CloudFront to deploy the distribution without the web ACL (usually 3 to 10 minutes)"
+    aws --region us-east-1 --no-cli-pager cloudfront wait distribution-deployed --id "$dist" ||
+      say "CloudFront hasn't finished yet; trying the delete anyway"
+  fi
+  for attempt in 1 2 3; do
+    tf "$HERE" plan -input=false -lock=true -var-file=terraform.tfvars.json -var "image_digest=$live" \
+      -var flat_rate_plan=false -target=aws_wafv2_web_acl.site -target=aws_pricingplanmanager_subscription.site \
+      -out="$WORK/drop.plan" > "$WORK/drop-plan.log" 2>&1 || { cat "$WORK/drop-plan.log"; break; }
     tf "$HERE" show -json "$WORK/drop.plan" > "$WORK/drop.json"
     jq -r '.resource_changes[] | select(.change.actions != ["no-op"] and .change.actions != ["read"]) | "  \(.change.actions | join("+")) \(.address)"' "$WORK/drop.json"
-    # Only the web ACL (and a subscription left in the state) may go, and the distribution change
+    # Only the web ACL, and a subscription left in the state, may go
     jq -e 'all(.resource_changes[] | select(.change.actions != ["no-op"] and .change.actions != ["read"]);
-      ((.address == "aws_wafv2_web_acl.site[0]" or .address == "aws_pricingplanmanager_subscription.site[0]") and .change.actions == ["delete"])
-      or (.address == "aws_cloudfront_distribution.site" and .change.actions == ["update"]))' "$WORK/drop.json" > /dev/null ||
+      (.address == "aws_wafv2_web_acl.site[0]" or .address == "aws_pricingplanmanager_subscription.site[0]") and .change.actions == ["delete"])' "$WORK/drop.json" > /dev/null ||
       { say "that plan changes more than the web ACL; not applying it"; break; }
-    # The delete can be refused for a minute while CloudFront lets go of the web ACL
     tf "$HERE" apply -input=false "$WORK/drop.plan" 2>&1 | tee -a "$WORK/drop-apply.log" && break
     [ "$attempt" = 3 ] || { say "trying again in 60 s"; sleep 60; }
   done
@@ -271,6 +293,10 @@ drop_flat_rate_plan() {
   fi
   say "the web ACL is gone and nothing bills for it; the site serves on pay-as-you-go CloudFront, without the rate limit."
   say "Until we choose what replaces it, set \"flat_rate_plan\": false in infra/terraform.tfvars.json."
+  if [ "$MODE" = drop-flat-rate ]; then
+    echo "RESULT: OK, the web ACL is gone (log: $LOG)"
+    exit 0
+  fi
   die "stopped: the web ACL had no active flat-rate subscription. Send us this line: ${reason:-see the log}"
 }
 
@@ -557,6 +583,17 @@ fi
 REGION="$(jq -r '.aws_region // "us-east-1"' "$HERE/terraform.tfvars.json")"
 [[ "$REGION" =~ ^[a-z]{2}(-[a-z]+)+-[0-9]$ ]] || die "aws_region in terraform.tfvars.json is not a region: $REGION"
 AWS=(aws --region "$REGION" --no-cli-pager)
+
+# --- recovery: a web ACL left in the state without a flat-rate subscription ---------------------
+if [ "$MODE" = drop-flat-rate ]; then
+  tf_init "$HERE"
+  if ! web_acl_unsubscribed; then
+    say "the state holds no web ACL without a flat-rate subscription; nothing to remove"
+    echo "RESULT: OK (log: $LOG)"
+    exit 0
+  fi
+  drop_flat_rate_plan
+fi
 
 # --- checks: after a deploy, and alone with --check ------------------------------------------------
 run_checks() {
