@@ -40,6 +40,12 @@
 # made or changed with a permissions boundary, without a change to who may assume a role, a role's
 # deletion, or a change to a managed policy's document. --dns reads the Cloudflare token from the
 # file named by CLOUDFLARE_API_TOKEN_FILE, and refuses without one.
+#
+# In runner mode the tree deploy.sh runs from is the commit: the runner hands over a commit's tree
+# without .git, checked against DEPLOY_COMMIT (40 lowercase hex, required), with the gitignored
+# tfvars and backend.hcl placed in it. git never runs: the build's commit is DEPLOY_COMMIT, its
+# source zip is the tree's files without those gitignored inputs, and the clean-tree and pushed
+# checks are left to the runner, which made them. --branch and --allow-unpushed don't apply.
 set -euo pipefail
 unset CDPATH
 umask 077
@@ -207,10 +213,14 @@ DEPLOY_PROFILE=splitwit-deploy
 if [ "$RUNNER" = yes ]; then
   # Nothing reads a person's answer, and no tool can wait for one
   exec < /dev/null
-  export GIT_TERMINAL_PROMPT=0
+  # The tree is the commit the runner verified, without .git: git never runs in runner mode
+  [[ "${DEPLOY_COMMIT:-}" =~ ^[0-9a-f]{40}$ ]] ||
+    die "runner mode needs DEPLOY_COMMIT, the commit the tree is, as 40 lowercase hex digits; got '${DEPLOY_COMMIT:-}'"
+  [ "$BRANCH" = main ] && [ "$ALLOW_UNPUSHED" = no ] ||
+    die "--branch and --allow-unpushed don't apply in runner mode: the runner chose and verified the commit"
 fi
 
-say "started $(date -u +%Y-%m-%dT%H:%M:%SZ), mode $MODE${DNS_MODE:+ $DNS_MODE}$([ "$RUNNER" = no ] || echo ", runner mode"), log $LOG"
+say "started $(date -u +%Y-%m-%dT%H:%M:%SZ), mode $MODE${DNS_MODE:+ $DNS_MODE}$([ "$RUNNER" = no ] || echo ", runner mode at commit $DEPLOY_COMMIT"), log $LOG"
 
 # --- preconditions -----------------------------------------------------------------------------
 
@@ -243,7 +253,12 @@ if [ "$RUNNER" = yes ]; then
   esac
 fi
 
-for tool in "$TF" aws git jq curl shasum; do
+if [ "$RUNNER" = yes ]; then
+  tools="$TF aws jq curl shasum zip"
+else
+  tools="$TF aws git jq curl shasum"
+fi
+for tool in $tools; do
   command -v "$tool" > /dev/null || die "$tool is not installed"
 done
 [ "$MODE" = deploy ] || command -v dig > /dev/null || die "dig is not installed"
@@ -431,6 +446,21 @@ caa_admits_amazon() {
     [ -z "$caa" ] || printf '%s\n' "$caa" | grep -q 'issue "amazon.com"' || return 1
   done
   [ "$found" = yes ]
+}
+
+# Runner mode's source zip, from the tree instead of git. The runner hands over the commit's tree,
+# without .git, having checked it file by file against DEPLOY_COMMIT: in runner mode the tree is the
+# commit. It also places the stacks' gitignored inputs in it, which .gitignore's infra/ rules name
+# (terraform.tfvars, terraform.tfvars.json, backend.hcl, state, logs, .terraform/); those stay out,
+# as they stay out of git archive. Files and symbolic links, as git keeps them; nothing else.
+tree_archive() {
+  local out="$1"
+  (cd "$REPO" && find . \( -path ./.git -o -path ./infra/.terraform -o -path './infra/*/.terraform' \) -prune -o \( -type f -o -type l \) -print) |
+    sed 's|^\./||' |
+    grep -Ev '^infra/(.*/)?(terraform\.tfvars|terraform\.tfvars\.json|backend\.hcl|[^/]*\.tfstate[^/]*|[^/]*\.log)$' |
+    LC_ALL=C sort > "$WORK/source.list" || die "couldn't list the tree's files"
+  (cd "$REPO" && zip -q -X -y "$out" -@ < "$WORK/source.list") || die "couldn't archive the tree"
+  say "runner mode: archived the tree's $(wc -l < "$WORK/source.list" | tr -d ' ') files, without the gitignored infra inputs"
 }
 
 # --- step 0: the account's plan -----------------------------------------------------------------
@@ -867,17 +897,22 @@ if [ -n "$DIGEST" ]; then
   say "deploying the existing image $DIGEST (no build)"
 else
   # --- the source ----------------------------------------------------------------------------
-  cd "$REPO"
-  [ -z "$(git status --porcelain)" ] || die "the working tree has changes or untracked files; deploy a clean commit"
-  current="$(git symbolic-ref --quiet --short HEAD || true)"
-  [ "$current" = "$BRANCH" ] || die "HEAD is on '${current:-a detached HEAD}', not '$BRANCH' (use --branch to name another)"
-  if [ "$ALLOW_UNPUSHED" = yes ]; then
-    say "--allow-unpushed: the commit may not be on origin"
+  if [ "$RUNNER" = yes ]; then
+    SHA="$DEPLOY_COMMIT"
+    say "runner mode: the tree is commit $SHA as the runner verified it, so git isn't asked and the clean-tree and pushed checks are the runner's"
   else
-    git fetch --quiet origin "$BRANCH" || die "could not fetch origin/$BRANCH"
-    git merge-base --is-ancestor HEAD FETCH_HEAD || die "HEAD is not on origin/$BRANCH; push it first (or --allow-unpushed)"
+    cd "$REPO"
+    [ -z "$(git status --porcelain)" ] || die "the working tree has changes or untracked files; deploy a clean commit"
+    current="$(git symbolic-ref --quiet --short HEAD || true)"
+    [ "$current" = "$BRANCH" ] || die "HEAD is on '${current:-a detached HEAD}', not '$BRANCH' (use --branch to name another)"
+    if [ "$ALLOW_UNPUSHED" = yes ]; then
+      say "--allow-unpushed: the commit may not be on origin"
+    else
+      git fetch --quiet origin "$BRANCH" || die "could not fetch origin/$BRANCH"
+      git merge-base --is-ancestor HEAD FETCH_HEAD || die "HEAD is not on origin/$BRANCH; push it first (or --allow-unpushed)"
+    fi
+    SHA="$(git rev-parse HEAD)"
   fi
-  SHA="$(git rev-parse HEAD)"
 
   # The lifecycle guard: a new image pushes the oldest of the kept ones out, and if that one
   # is live, Lambda fails the function. Refuse while the live image is about to be pushed out.
@@ -889,7 +924,11 @@ else
     fi
   fi
 
-  git archive --format=zip -o "$WORK/source.zip" "$SHA"
+  if [ "$RUNNER" = yes ]; then
+    tree_archive "$WORK/source.zip"
+  else
+    git archive --format=zip -o "$WORK/source.zip" "$SHA"
+  fi
   ZIP_SHA256="$(shasum -a 256 "$WORK/source.zip" | cut -d' ' -f1)"
   TAG="app-${SHA:0:12}-$(date -u +%Y%m%dT%H%M%SZ)"
   KEY="manual/$ZIP_SHA256.zip"

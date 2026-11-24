@@ -1,9 +1,10 @@
 // node --test infra/deploy.test.mjs
-// infra/deploy.sh, offline. Each run is of a copy of the script in a temporary directory, with
-// sample tfvars and stubs for aws, tofu, git, curl and dig, so no run reaches AWS, Cloudflare or the
-// network. It checks runner mode (DEPLOY_NONINTERACTIVE=1): which profile and environment it
-// accepts, that it never reads standard input, that it applies only plans that pass their mode's
-// checks, and that it refuses the rest. The plan checks are also run against sample plans.
+// infra/deploy.sh, offline. Each run is of a copy of the script in a temporary directory without
+// .git, as a deploy runner hands it over, with sample tfvars and stubs for aws, tofu, git, curl and
+// dig, so no run reaches AWS, Cloudflare or the network. It checks runner mode
+// (DEPLOY_NONINTERACTIVE=1): which profile, commit and environment it accepts, that it never reads
+// standard input or runs git, that it applies only plans that pass their mode's checks, and that it
+// refuses the rest. The plan checks are also run against sample plans.
 
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
@@ -16,6 +17,9 @@ import { fileURLToPath } from 'node:url';
 const DEPLOY = path.join(path.dirname(fileURLToPath(import.meta.url)), 'deploy.sh');
 const JQ = spawnSync('/bin/sh', ['-c', 'command -v jq'], { encoding: 'utf8' }).stdout.trim();
 const DIGEST = `sha256:${'a'.repeat(64)}`;
+const LIVE = `sha256:${'b'.repeat(64)}`;
+const BUILT = `sha256:${'c'.repeat(64)}`;
+const COMMIT = '0123456789abcdef0123456789abcdef01234567';
 const BOUNDARY = 'arn:aws:iam::000000000000:policy/example-boundary';
 const TOKEN = 'cf_example_token_0123456789abcdefghijklmnopqrstuvwxyz';
 
@@ -39,12 +43,23 @@ case "$cmd" in
     if [ $# -ge 2 ]; then jq ".$2.value" "$BOX/outputs-$stack.json"; else cat "$BOX/outputs-$stack.json"; fi ;;
   *) exit 97 ;;
 esac`,
+  // A deploy's calls, answered as for a function running LIVE, whose build makes BUILT. The upload
+  // keeps a copy of the source zip.
   aws: `
 echo "aws $*" >> "$BOX/calls"
 case "$*" in
   *"freetier get-account-plan-state"*)
     if [ -f "$BOX/freetier-denied" ]; then echo "An error occurred (AccessDeniedException)" >&2; exit 254; fi
     printf 'PAID\\tACTIVE\\tNone\\n' ;;
+  *"lambda get-function"*) echo "000000000000.dkr.ecr.us-east-1.amazonaws.com/splitwit@${LIVE}" ;;
+  *"ecr describe-images"*"--image-ids"*) printf '${BUILT}\\tapplication/vnd.oci.image.manifest.v1+json\\n' ;;
+  *"ecr describe-images"*) printf '${LIVE}\\t2026-11-01T00:00:00+00:00\\n' ;;
+  *"s3api put-object"*)
+    while [ $# -gt 0 ]; do [ "$1" = --body ] && cp "$2" "$BOX/uploaded.zip"; shift; done
+    echo example-version ;;
+  *"codebuild start-build"*) echo splitwit-build:example ;;
+  *"codebuild batch-get-builds"*) printf 'SUCCEEDED\\tCOMPLETED\\n' ;;
+  *"sns list-subscriptions-by-topic"*) echo arn:aws:sns:us-east-1:000000000000:splitwit-alerts:example ;;
   *) echo "aws stub: no answer for this call" >&2; exit 97 ;;
 esac`,
   dig: `
@@ -53,14 +68,24 @@ case "$*" in
   *" NS "*) echo ns1.example.net. ;;
   *CAA*) echo '0 issue "amazon.com"' ;;
 esac`,
-  // Keeps what it read on standard input (Cloudflare's token arrives there), and fails
+  // Cloudflare's API (its token arrives on standard input, with -K -): keeps what it read, and fails.
+  // The checks after a deploy: answers as the site behind CloudFront does.
   curl: `
 echo "curl $*" >> "$BOX/calls"
-env | grep '^CLOUDFLARE_' >> "$BOX/curl-env"
-cat >> "$BOX/curl-stdin"
-exit 22`,
+case "$*" in
+  *"-K -"*)
+    env | grep '^CLOUDFLARE_' >> "$BOX/curl-env"
+    cat >> "$BOX/curl-stdin"
+    exit 22 ;;
+  *redirect_url*) printf 'https://splitwit.us/' ;;
+  *"-D -"*) printf 'HTTP/2 200\\r\\nstrict-transport-security: max-age=63072000; includeSubDomains; preload\\r\\n\\r\\n' ;;
+  *lambda-url*) printf 403 ;;
+  *"http://"*) printf 301 ;;
+  *) printf 200 ;;
+esac`,
+  // Runner mode never runs git: a call is recorded where every runner-mode run looks for it
   git: `
-echo "git $*" >> "$BOX/calls"
+echo "git $*" >> "$BOX/git-called"
 exit 97`,
 };
 
@@ -95,21 +120,30 @@ function sandbox(t) {
   };
 }
 
-const RUNNER = { DEPLOY_NONINTERACTIVE: '1', AWS_PROFILE: 'splitwit-deploy' };
+// What the runner sets (AWS_CONFIG_FILE is set for every run below)
+const RUNNER = { DEPLOY_NONINTERACTIVE: '1', DEPLOY_COMMIT: COMMIT, AWS_PROFILE: 'splitwit-deploy' };
 
-// Runs the copy with only the variables given (undefined unsets one). stdin 'open' is a pipe that
-// is never written to or closed: a script that reads it waits until the timeout kills it.
-function run(box, args, vars = {}, { stdin = 'closed', timeout = 15_000 } = {}) {
+// Runs the copy as the runner does (bash without startup files, LC_ALL=C), with only the variables
+// given (undefined unsets one). stdin 'open' is a pipe that is never written to or closed: a script
+// that reads it waits until the timeout kills it. A runner-mode run fails the test if it ran git.
+async function run(box, args, vars = {}, options = {}) {
+  const r = await spawnRun(box, args, vars, options);
+  if (vars.DEPLOY_NONINTERACTIVE === '1') assert.equal(box.read('git-called'), '', `git ran in runner mode:\n${r.out}`);
+  return r;
+}
+
+function spawnRun(box, args, vars, { stdin = 'closed', timeout = 15_000 } = {}) {
   const env = {
     HOME: path.join(box.dir, 'home'),
     TMPDIR: path.join(box.dir, 'tmp'),
     PATH: `${path.join(box.dir, 'bin')}:/usr/bin:/bin`,
+    LC_ALL: 'C',
     AWS_CONFIG_FILE: path.join(box.dir, 'aws-config'),
     ...vars,
   };
   for (const [k, v] of Object.entries(env)) if (v === undefined) delete env[k];
   return new Promise((resolve) => {
-    const child = spawn('/bin/bash', [box.script, ...args], { env, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn('/bin/bash', ['--noprofile', '--norc', box.script, ...args], { env, stdio: ['pipe', 'pipe', 'pipe'] });
     let out = '';
     child.stdout.on('data', (d) => (out += d));
     child.stderr.on('data', (d) => (out += d));
@@ -457,4 +491,83 @@ test('IAM_BEYOND_DEPLOY_ROLE: names exactly the IAM changes the deploy role may 
   const unbounded = planned(role('splitwit-app'), role('splitwit-budgets-action', { permissions_boundary: BOUNDARY }));
   assert.deepEqual(named([change('aws_iam_role_policy.app', ['update'], { after: { role: 'splitwit-app' } })], unbounded), ['aws_iam_role_policy.app']);
   assert.deepEqual(named([change('aws_iam_role_policy.x', ['create'], { after: {}, after_unknown: { role: true } })], unbounded), ['aws_iam_role_policy.x']);
+});
+
+// --- runner mode: the commit is the tree, and git never runs ----------------------------------------
+
+test('runner mode needs DEPLOY_COMMIT as 40 lowercase hex, before running any tool', async (t) => {
+  for (const commit of [undefined, '', 'HEAD', 'main', COMMIT.toUpperCase(), COMMIT.slice(1), `${COMMIT}0`, 'g'.repeat(40)]) {
+    const box = sandbox(t);
+    const r = await run(box, ['--bootstrap'], { ...RUNNER, DEPLOY_COMMIT: commit });
+    assert.equal(r.code, 1, `${commit}: ${r.out}`);
+    assert.match(r.out, /runner mode needs DEPLOY_COMMIT, the commit the tree is, as 40 lowercase hex digits/);
+    assert.equal(box.read('calls'), '', `${commit}: no tool runs`);
+  }
+});
+
+test('--branch and --allow-unpushed don\'t apply in runner mode', async (t) => {
+  for (const args of [['--branch', 'other'], ['--allow-unpushed']]) {
+    const box = sandbox(t);
+    const r = await run(box, args, RUNNER);
+    assert.equal(r.code, 1, r.out);
+    assert.match(r.out, /--branch and --allow-unpushed don't apply in runner mode/);
+    assert.equal(box.read('calls'), '');
+  }
+});
+
+// A tree as the runner hands it over: the commit's files, no .git, and the gitignored inputs placed
+// in infra/, infra/bootstrap/ and infra/dns/ (sandbox() writes those), plus leftovers .gitignore
+// covers, which the source zip must leave out as git archive would
+const TRACKED = ['deploy/buildspec.yml', 'deploy/run.sh', 'infra/backend.hcl.example', 'infra/deploy.sh', 'infra/terraform.tfvars.json.example', 'link', 'package.json', 'src/app.ts'];
+
+function deployBox(t) {
+  const box = sandbox(t);
+  const repo = path.join(box.dir, 'repo');
+  for (const f of ['deploy/buildspec.yml', 'deploy/run.sh', 'infra/backend.hcl.example', 'infra/terraform.tfvars.json.example', 'package.json', 'src/app.ts',
+    'infra/dns/.terraform/providers/example', 'infra/old.tfstate', 'infra/bootstrap/terraform.tfstate.backup', 'infra/tofu.log']) {
+    mkdirSync(path.dirname(path.join(repo, f)), { recursive: true });
+    writeFileSync(path.join(repo, f), `${f}\n`);
+  }
+  chmodSync(path.join(repo, 'deploy/run.sh'), 0o755);
+  symlinkSync('package.json', path.join(repo, 'link'));
+  box.write('outputs-bootstrap.json', { source_bucket: { value: 'splitwit-build-src-000000000000' }, codebuild_project: { value: 'splitwit-build' } });
+  box.write('outputs-infra.json', {
+    distribution_domain: { value: 'd111111abcdef8.cloudfront.net' },
+    function_url: { value: 'https://example.lambda-url.us-east-1.on.aws/' },
+    flat_rate_plan: { value: 'ACTIVE' },
+    alerts_topic_arn: { value: 'arn:aws:sns:us-east-1:000000000000:splitwit-alerts' },
+    image_uri: { value: `000000000000.dkr.ecr.us-east-1.amazonaws.com/splitwit@${BUILT}` },
+  });
+  box.write('plan-infra.json', { resource_changes: [change('aws_lambda_function.app', ['update'])], planned_values: planned(role('splitwit-app')) });
+  return box;
+}
+
+test('a runner deploy builds DEPLOY_COMMIT from the tree, without git, and deploys what it built', async (t) => {
+  const box = deployBox(t);
+  const r = await run(box, [], RUNNER, { stdin: 'open' });
+  assert.equal(r.signal, null, `waited for input\n${r.out}`);
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /the tree is commit 0123456789abcdef0123456789abcdef01234567 as the runner verified it/);
+  assert.match(r.out, /RESULT: OK/);
+  assert.equal(box.read('applied'), 'infra\n');
+
+  const calls = box.read('calls');
+  assert.match(calls, new RegExp(`codebuild start-build .*name=IMAGE_TAG,value=app-${COMMIT.slice(0, 12)}-`), 'the image is tagged with the commit');
+  assert.match(calls, new RegExp(`tofu infra plan .*-var image_digest=${BUILT}`), 'the built image is deployed');
+
+  // The source zip: the tree's files and links, at their modes, without the gitignored inputs
+  const zip = path.join(box.dir, 'uploaded.zip');
+  const names = spawnSync('unzip', ['-Z1', zip], { encoding: 'utf8' }).stdout.trim().split('\n').sort();
+  assert.deepEqual(names, TRACKED);
+  const info = spawnSync('zipinfo', [zip], { encoding: 'utf8' }).stdout;
+  assert.match(info, /^-rwxr-xr-x .* deploy\/run\.sh$/m, 'an executable stays executable');
+  assert.match(info, /^l.* link$/m, 'a symbolic link stays a link');
+});
+
+test('without runner mode, a deploy still takes its commit from git', async (t) => {
+  const box = deployBox(t);
+  const r = await run(box, [], { AWS_PROFILE: 'any-profile' });
+  assert.equal(r.code, 1, r.out);
+  assert.match(box.read('git-called'), /^git status --porcelain$/m);
+  assert.equal(box.read('applied'), '');
 });

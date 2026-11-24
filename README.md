@@ -240,8 +240,11 @@ fails because a role made moments before isn't visible to AWS yet, run the same 
 
 A deploy runner can run the same script without a person: `DEPLOY_NONINTERACTIVE=1` with
 `AWS_PROFILE=splitwit-deploy`, a deploy role whose profile is in the runner's own
-`AWS_CONFIG_FILE`. Nothing is asked. A plan that passes its mode's checks is applied, and any other
-ends with `RESULT: REFUSED (...)` and nothing applied. Runner mode refuses `--state` and any IAM
+`AWS_CONFIG_FILE`, and `DEPLOY_COMMIT`, the commit whose tree, without `.git`, the runner hands
+over and has checked. That tree is the commit: git never runs, and the build's source is the tree's
+files without the gitignored tfvars and `backend.hcl`. Nothing is asked. A plan that passes its
+mode's checks is applied, and any other ends with `RESULT: REFUSED (...)` and nothing applied.
+Runner mode refuses `--state` and any IAM
 change the deploy role may not make, and the `--dns` steps read the Cloudflare token from the file
 `CLOUDFLARE_API_TOKEN_FILE` names. A deploy role that may make or change the site's roles only
 with a permissions boundary needs that boundary on them first: set `permissions_boundary_arn` in
