@@ -48,8 +48,9 @@ resource "aws_cloudfront_distribution" "site" {
   aliases         = var.hostnames
   is_ipv6_enabled = true
   http_version    = "http2and3"
-  price_class     = "PriceClass_100"
-  web_acl_id      = one(aws_wafv2_web_acl.site[*].arn)
+  # Every edge location: a flat-rate plan covers the whole network
+  price_class = "PriceClass_All"
+  web_acl_id  = one(aws_wafv2_web_acl.site[*].arn)
 
   origin {
     origin_id                = "lambda"
