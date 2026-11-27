@@ -52,6 +52,24 @@ service cloud.firestore {
         && (!('assignedTo' in data) || (data.assignedTo is list && data.assignedTo.size() <= 50));
     }
 
+    // A count of the Textract calls /api/ocr made in a window (src/services/ocr/server/limits.ts):
+    // a write either counts one more call in the stored window, or starts a new window, stamped
+    // with the request's own time, once the stored one is an hour old. No write can lower a count.
+    function isOcrUsage(data) {
+      return data.keys().hasOnly(['windowStart', 'count'])
+        && data.windowStart is timestamp
+        && data.count is int;
+    }
+
+    function startsOcrWindow(data) {
+      return isOcrUsage(data) && data.windowStart == request.time && data.count == 1;
+    }
+
+    function isOcrUsageUpdate(before, after) {
+      return (isOcrUsage(after) && after.windowStart == before.windowStart && after.count == before.count + 1)
+        || (request.time >= before.windowStart + duration.value(3600, 's') && startsOcrWindow(after));
+    }
+
     function isValidShareCode(code) {
       // Share codes are 6 uppercase alphanumeric characters
       return code.size() == 6 && code.matches('^[A-Z2-9]+$');
@@ -98,6 +116,23 @@ service cloud.firestore {
 
         allow delete: if isValidShareCode(expenseCode);
       }
+
+      // This expense's count of Textract calls
+      match /usage/ocr {
+        allow read: if isValidShareCode(expenseCode);
+        allow create: if isValidShareCode(expenseCode) && startsOcrWindow(request.resource.data);
+        allow update: if isValidShareCode(expenseCode)
+          && isOcrUsageUpdate(resource.data, request.resource.data);
+        allow delete: if false;
+      }
+    }
+
+    // The app-wide count of Textract calls
+    match /usage/ocr {
+      allow read: if true;
+      allow create: if startsOcrWindow(request.resource.data);
+      allow update: if isOcrUsageUpdate(resource.data, request.resource.data);
+      allow delete: if false;
     }
 
     // Deny access to all other collections

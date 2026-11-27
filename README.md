@@ -68,6 +68,8 @@ TEXTRACT_REGION=us-east-1
    ```bash
    firebase deploy --only firestore:rules
    ```
+   Deploy them before the app: `/api/ocr` keeps its scan counts under these rules, and falls back
+   to Tesseract for every scan while the rules refuse its writes.
 
 ### Running Locally
 
@@ -113,7 +115,7 @@ src/
 │   └── total/             # Total editor with tip shortcuts
 ├── hooks/                 # Custom React hooks
 ├── services/              # Business logic
-│   ├── ocr/               # OCR providers (cloud, Tesseract, fallback; server/ holds Textract)
+│   ├── ocr/               # OCR providers (cloud, Tesseract, fallback; server/ holds Textract and the scan limits)
 │   ├── receipt-link/      # Toast receipt page parser
 │   ├── expenses.ts        # Firestore CRUD operations
 │   ├── firebase.ts        # Firebase initialization
@@ -135,7 +137,8 @@ A scanned photo goes through two providers in order:
 2. **Fallback**: Tesseract.js in the browser, parsing the text with regular expressions.
 
 The route falls back on any failure, and refuses images that are not JPEG or PNG, larger than
-4 MB, or sent without the share code of an existing expense.
+4 MB, or sent without the share code of an existing expense. It stops calling Textract once a scan
+limit is reached (see [Security](#security)).
 
 The server needs no AWS access key. On AWS Lambda, the SDK's default credential chain picks up
 the execution role's short-lived credentials, and the role allows one Textract action. Locally the
@@ -198,6 +201,18 @@ Test coverage includes:
 - **Rate limit**: CloudFront's web ACL blocks an address that sends more than 1000 requests (pages,
   static assets and API calls alike) in five minutes (`infra/waf.tf`), on CloudFront's flat-rate
   Free plan
+- **Scan limits**: `/api/ocr` makes at most 20 Textract calls an hour for one expense and 200 an
+  hour across the app (`OCR_LIMITS` in `src/services/ocr/server/limits.ts`). Over either limit it
+  answers 429 with `Retry-After`, without calling Textract, and the browser reads the photo with
+  Tesseract. Expenses are free to create, so the app-wide limit is the one that bounds the cost.
+  Each count is a Firestore document (`expenses/{code}/usage/ocr` and `usage/ocr`), and a request
+  reads and writes both in one transaction, so parallel requests can't take more than a limit
+  allows. A window starts with the first call after the previous one ended, so a burst that
+  straddles two windows can reach twice a limit within an hour. The server's Firestore client has
+  no more access than a browser's, so `firestore.rules` lets a write only count one more call in
+  the stored window, or start a new window, stamped with the request's time, once the stored one is
+  an hour old; the rules repeat the window's length. No one can lower a count, but anyone can use up
+  the app-wide one, which sends every scan to Tesseract until its window ends
 - **No Authentication**: Intentional design choice for frictionless sharing
 
 ## Deployment

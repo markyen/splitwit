@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getExpense } from '@/services/expenses';
+import { reserveTextractCall } from '@/services/ocr/server/limits';
 import { ServerOCRProvider, UnusableReceiptError } from '@/services/ocr/server/provider';
 import { TextractProvider } from '@/services/ocr/server/textract';
 
@@ -7,7 +8,7 @@ import { TextractProvider } from '@/services/ocr/server/textract';
 // send every scan to the browser's Tesseract). The image stays in memory and is never logged or
 // stored; the one log line per request carries numbers and an exception name only. The route is
 // open, so it is gated cheaply: a JPEG or PNG of at most 4 MB, read incrementally, and the share
-// code of an expense that exists.
+// code of an expense that exists. Each Textract call then counts against the limits in OCR_LIMITS.
 
 export const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 
@@ -17,7 +18,12 @@ const SHARE_CODE = /^[A-Z2-9]{6}$/;
 const IMAGE_TYPES = new Set(['image/jpeg', 'image/png']);
 
 class StepError extends Error {
-  constructor(message: string, readonly status: number, readonly fallback = false) {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly fallback = false,
+    readonly retryAfterSeconds?: number
+  ) {
     super(message);
   }
 }
@@ -119,6 +125,7 @@ export async function POST(request: NextRequest) {
   let bytes = 0;
   let items = 0;
   let exception: string | undefined;
+  let limit: string | undefined;
 
   try {
     const provider = getProvider();
@@ -146,6 +153,18 @@ export async function POST(request: NextRequest) {
       throw new StepError('Expense not found', 404);
     }
 
+    let reservation;
+    try {
+      reservation = await reserveTextractCall(code);
+    } catch (error) {
+      exception = error instanceof Error ? error.name : 'unknown';
+      throw new StepError("Couldn't check the scan limit", 502, true);
+    }
+    if (!reservation.allowed) {
+      limit = reservation.limit;
+      throw new StepError('Too many scans, try again later', 429, true, reservation.retryAfterSeconds);
+    }
+
     let receipt;
     try {
       receipt = await provider.analyze(imageBytes, mediaType);
@@ -167,12 +186,16 @@ export async function POST(request: NextRequest) {
     }
     return NextResponse.json(
       step.fallback ? { error: step.message, fallback: true } : { error: step.message },
-      { status }
+      {
+        status,
+        headers: step.retryAfterSeconds ? { 'Retry-After': String(step.retryAfterSeconds) } : undefined,
+      }
     );
   } finally {
     console.info(
       `[API /ocr] status=${status} provider=${providerName} ms=${Date.now() - started} bytes=${bytes} items=${items}` +
-        (exception ? ` exception=${exception}` : '')
+        (exception ? ` exception=${exception}` : '') +
+        (limit ? ` limit=${limit}` : '')
     );
   }
 }

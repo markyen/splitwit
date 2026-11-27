@@ -1,6 +1,8 @@
 // @vitest-environment node
+import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { NextRequest } from 'next/server';
+import { fakeFirestore } from '@/test/fakeFirestore';
 import { lineItem, summary, textractResponse } from '@/test/textractReceipt';
 
 const sendMock = vi.fn();
@@ -24,6 +26,15 @@ vi.mock('@/services/expenses', () => ({
   getExpense: (code: string) => getExpenseMock(code),
 }));
 
+// The scan limits' counters live in the in-memory Firestore
+vi.mock('@/services/firebase', () => ({ db: {} }));
+vi.mock('firebase/firestore', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('firebase/firestore')>();
+  const { fakeFirestore } = await import('@/test/fakeFirestore');
+  return { ...actual, ...fakeFirestore.module };
+});
+
+import { OCR_LIMITS } from '@/services/ocr/server/limits';
 import { POST, MAX_IMAGE_BYTES } from './route';
 
 const JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]);
@@ -56,6 +67,7 @@ const expectError = async (response: Response, status: number, fallback?: true) 
 };
 
 beforeEach(() => {
+  fakeFirestore.reset();
   vi.stubEnv('OCR_PROVIDER', 'textract');
   vi.stubEnv('TEXTRACT_REGION', 'us-east-1');
   getExpenseMock.mockResolvedValue({ title: null, total: null, receiptUrl: null });
@@ -140,6 +152,8 @@ describe('POST /api/ocr', () => {
     await expectError(await post({ code: 'ABCDE0' }), 404);
     expect(getExpenseMock).not.toHaveBeenCalled();
     expect(sendMock).not.toHaveBeenCalled();
+    expect(fakeFirestore.attempts).toBe(0);
+    expect(fakeFirestore.paths()).toEqual([]);
   });
 
   it('returns 415 for a type other than JPEG or PNG, by declared type and by bytes', async () => {
@@ -258,5 +272,109 @@ describe('POST /api/ocr', () => {
     expect(logged).toContain('exception=ThrottlingException');
     expect(logged).toContain('status=200');
     expect(logged).toContain('items=2');
+  });
+});
+
+describe('POST /api/ocr scan limits', () => {
+  const EXPENSE_USAGE = `expenses/${CODE}/usage/ocr`;
+  const GLOBAL_USAGE = 'usage/ocr';
+  const WINDOW_MS = OCR_LIMITS.windowSeconds * 1000;
+  const T0 = Date.UTC(2030, 0, 1, 12);
+  const at = (ms: number) => fakeFirestore.timestamp(ms);
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(T0);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('starts both counts on the first call', async () => {
+    expect((await post()).status).toBe(200);
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(fakeFirestore.get(EXPENSE_USAGE)).toEqual({ windowStart: at(T0), count: 1 });
+    expect(fakeFirestore.get(GLOBAL_USAGE)).toEqual({ windowStart: at(T0), count: 1 });
+  });
+
+  it('calls Textract for the last call under both limits, and counts it', async () => {
+    fakeFirestore.seed(EXPENSE_USAGE, { windowStart: at(T0 - 60_000), count: OCR_LIMITS.perExpense - 1 });
+    fakeFirestore.seed(GLOBAL_USAGE, { windowStart: at(T0 - 120_000), count: OCR_LIMITS.global - 1 });
+
+    expect((await post()).status).toBe(200);
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(fakeFirestore.get(EXPENSE_USAGE)).toEqual({ windowStart: at(T0 - 60_000), count: OCR_LIMITS.perExpense });
+    expect(fakeFirestore.get(GLOBAL_USAGE)).toEqual({ windowStart: at(T0 - 120_000), count: OCR_LIMITS.global });
+  });
+
+  it.each([
+    ['expense', EXPENSE_USAGE, OCR_LIMITS.perExpense],
+    ['global', GLOBAL_USAGE, OCR_LIMITS.global],
+  ])('returns 429 with Retry-After at the %s limit, without calling Textract', async (limit, path, max) => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    fakeFirestore.seed(path, { windowStart: at(T0 - 10 * 60_000), count: max });
+
+    const response = await post();
+
+    const body = await expectError(response, 429, true);
+    expect(body.error).toBe('Too many scans, try again later');
+    expect(response.headers.get('retry-after')).toBe(String(OCR_LIMITS.windowSeconds - 10 * 60));
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(fakeFirestore.paths()).toEqual([path]);
+    expect(fakeFirestore.get(path)).toEqual({ windowStart: at(T0 - 10 * 60_000), count: max });
+    expect(info).toHaveBeenCalledTimes(1);
+    expect(info.mock.calls[0][0]).toContain(`status=429`);
+    expect(info.mock.calls[0][0]).toContain(`limit=${limit}`);
+  });
+
+  it('starts a new window once the old one is over', async () => {
+    for (let i = 0; i < OCR_LIMITS.perExpense; i++) {
+      expect((await post()).status).toBe(200);
+    }
+
+    vi.setSystemTime(T0 + WINDOW_MS - 1000);
+    const limited = await post();
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get('retry-after')).toBe('1');
+    expect(fakeFirestore.get(EXPENSE_USAGE)).toEqual({ windowStart: at(T0), count: OCR_LIMITS.perExpense });
+
+    vi.setSystemTime(T0 + WINDOW_MS);
+    expect((await post()).status).toBe(200);
+
+    expect(sendMock).toHaveBeenCalledTimes(OCR_LIMITS.perExpense + 1);
+    expect(fakeFirestore.get(EXPENSE_USAGE)).toEqual({ windowStart: at(T0 + WINDOW_MS), count: 1 });
+    expect(fakeFirestore.get(GLOBAL_USAGE)).toEqual({ windowStart: at(T0 + WINDOW_MS), count: 1 });
+  });
+
+  it.each([
+    ['expense', EXPENSE_USAGE, OCR_LIMITS.perExpense, () => CODE],
+    ['global', GLOBAL_USAGE, OCR_LIMITS.global, (i: number) => `ABCDE${'ABCDEFGHJK'[i]}`],
+  ])('lets parallel requests take only the calls left under the %s limit', async (_limit, path, max, codeFor) => {
+    fakeFirestore.seed(path, { windowStart: at(T0), count: max - 3 });
+
+    const responses = await Promise.all(Array.from({ length: 10 }, (_, i) => post({ code: codeFor(i) })));
+
+    const statuses = responses.map((response) => response.status).sort();
+    expect(statuses).toEqual([200, 200, 200, 429, 429, 429, 429, 429, 429, 429]);
+    expect(sendMock).toHaveBeenCalledTimes(3);
+    expect(fakeFirestore.get(path)).toEqual({ windowStart: at(T0), count: max });
+    // The requests did overlap: some commits found a count changed since their read, and retried
+    expect(fakeFirestore.conflicts).toBeGreaterThan(0);
+  });
+
+  it('returns 502 with fallback when the counts cannot be read or written', async () => {
+    fakeFirestore.failure = namedError('FirebaseError');
+
+    await expectError(await post(), 502, true);
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it('has the window that firestore.rules waits out before a count may restart', () => {
+    const rules = readFileSync(new URL('../../../../firestore.rules', import.meta.url), 'utf8');
+
+    expect(rules).toContain(`duration.value(${OCR_LIMITS.windowSeconds}, 's')`);
   });
 });
