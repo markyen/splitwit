@@ -1,7 +1,10 @@
 # CloudFront's flat-rate Free plan ($0 a month, no overage charges), which covers the distribution
-# and one web ACL. The web ACL has one rule: an address that sends more than api_post_limit POSTs to
-# /api/ in five minutes is blocked until its rate falls. The two API routes call Textract and fetch
-# receipt links, so they are what costs money when abused.
+# and one web ACL. The web ACL has one rule, the plan's IP-based rate limiting as it comes: an
+# address that sends more than rate_per_address_limit requests in five minutes is blocked until its
+# rate falls. It counts every request, pages, static assets and API calls alike, so it bounds how
+# many Lambda calls one address can drive, the two API routes (Textract and receipt links) among
+# them. There is no scope-down statement, so no match conditions or text transformations, none of
+# which the plan lists.
 #
 # No AWS managed rule groups. The Core rule set's SizeRestrictions_BODY blocks any request body
 # over 8 KB, and every receipt upload and OCR request is larger; the app has no SQL or PHP for the
@@ -17,7 +20,7 @@ resource "aws_wafv2_web_acl" "site" {
   # A CloudFront web ACL lives in us-east-1
   region      = "us-east-1"
   name        = "splitwit"
-  description = "Rate limit on POSTs to the API"
+  description = "Rate limit on requests from one address"
   scope       = "CLOUDFRONT"
 
   default_action {
@@ -25,7 +28,7 @@ resource "aws_wafv2_web_acl" "site" {
   }
 
   rule {
-    name     = "api-post-rate"
+    name     = "rate-per-address"
     priority = 0
 
     action {
@@ -34,57 +37,15 @@ resource "aws_wafv2_web_acl" "site" {
 
     statement {
       rate_based_statement {
-        limit                 = var.api_post_limit
+        limit                 = var.rate_per_address_limit
         evaluation_window_sec = 300
         aggregate_key_type    = "IP"
-
-        scope_down_statement {
-          and_statement {
-            statement {
-              byte_match_statement {
-                search_string         = "POST"
-                positional_constraint = "EXACTLY"
-                field_to_match {
-                  method {}
-                }
-                text_transformation {
-                  priority = 0
-                  type     = "NONE"
-                }
-              }
-            }
-
-            # Every route under /api/, matched after decoding and normalising the path, so
-            # neither %-escapes, case nor doubled slashes step around it
-            statement {
-              byte_match_statement {
-                search_string         = "/api/"
-                positional_constraint = "STARTS_WITH"
-                field_to_match {
-                  uri_path {}
-                }
-                text_transformation {
-                  priority = 0
-                  type     = "URL_DECODE"
-                }
-                text_transformation {
-                  priority = 1
-                  type     = "NORMALIZE_PATH"
-                }
-                text_transformation {
-                  priority = 2
-                  type     = "LOWERCASE"
-                }
-              }
-            }
-          }
-        }
       }
     }
 
     visibility_config {
       cloudwatch_metrics_enabled = true
-      metric_name                = "splitwit-api-post-rate"
+      metric_name                = "splitwit-rate-per-address"
       sampled_requests_enabled   = true
     }
   }

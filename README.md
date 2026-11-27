@@ -195,8 +195,9 @@ Test coverage includes:
   SHA-256 of its body (`src/services/post.ts`). CloudFront signs the requests it forwards to the
   Lambda function URL, and the function URL accepts a signed POST only with that hash, so the
   function can't be called directly around CloudFront
-- **Rate limit**: CloudFront's web ACL blocks an address that sends more than 30 POSTs to the API
-  in five minutes (`infra/waf.tf`), on CloudFront's flat-rate Free plan
+- **Rate limit**: CloudFront's web ACL blocks an address that sends more than 1000 requests (pages,
+  static assets and API calls alike) in five minutes (`infra/waf.tf`), on CloudFront's flat-rate
+  Free plan
 - **No Authentication**: Intentional design choice for frictionless sharing
 
 ## Deployment

@@ -66,21 +66,26 @@ variable "textract_monthly_limit_usd" {
 variable "flat_rate_plan" {
   description = <<-EOT
     true: subscribe the distribution to CloudFront's flat-rate Free plan, with the web ACL that
-    rate-limits POSTs to the API (waf.tf). false: neither, and the distribution is pay-as-you-go.
+    rate-limits each address (waf.tf). false: neither, and the distribution is pay-as-you-go.
     deploy.sh applies false by itself if the plan refuses the subscription.
   EOT
   type        = bool
   default     = true
 }
 
-variable "api_post_limit" {
-  description = "POSTs to /api/ one address may make in five minutes before the web ACL blocks it, until its rate falls."
+variable "rate_per_address_limit" {
+  description = <<-EOT
+    Requests one address may make in five minutes before the web ACL blocks it, until its rate
+    falls. Every request counts: pages, static assets (edge cache hits too) and API calls. A page
+    load with nothing cached makes about 19; the default leaves room for 30 of those and their API
+    calls, while one address can drive no more than about this many Lambda calls in five minutes.
+  EOT
   type        = number
-  default     = 30
+  default     = 1000
 
   validation {
-    condition     = var.api_post_limit >= 10 && var.api_post_limit <= 2000 && floor(var.api_post_limit) == var.api_post_limit
-    error_message = "A whole number from 10 (WAF's least) to 2000."
+    condition     = var.rate_per_address_limit >= 100 && var.rate_per_address_limit <= 10000 && floor(var.rate_per_address_limit) == var.rate_per_address_limit
+    error_message = "A whole number from 100 (about five page loads with nothing cached) to 10000."
   }
 }
 

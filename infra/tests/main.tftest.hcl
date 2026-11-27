@@ -235,7 +235,7 @@ run "reserved_concurrency_refuses_zero" {
   expect_failures = [var.reserved_concurrency]
 }
 
-run "rate_limit_on_api_posts" {
+run "rate_limit_per_address" {
   command = plan
 
   assert {
@@ -250,24 +250,23 @@ run "rate_limit_on_api_posts" {
   assert {
     condition = alltrue([
       for r in aws_wafv2_web_acl.site[0].rule :
-      length(r.action[0].block) == 1
-      && r.statement[0].rate_based_statement[0].limit == 30
+      r.name == "rate-per-address" && r.visibility_config[0].metric_name == "splitwit-rate-per-address"
+      && length(r.action[0].block) == 1
+      && r.statement[0].rate_based_statement[0].limit == 1000
       && r.statement[0].rate_based_statement[0].evaluation_window_sec == 300
       && r.statement[0].rate_based_statement[0].aggregate_key_type == "IP"
     ])
-    error_message = "The rule blocks an address over 30 requests in five minutes."
+    error_message = "The rule blocks an address over 1000 requests in five minutes."
   }
 
   assert {
     condition = alltrue([
-      for r in aws_wafv2_web_acl.site[0].rule : jsonencode([
-        for s in r.statement[0].rate_based_statement[0].scope_down_statement[0].and_statement[0].statement : [
-          s.byte_match_statement[0].search_string, s.byte_match_statement[0].positional_constraint,
-          join(",", [for t in s.byte_match_statement[0].text_transformation : t.type]),
-        ]
-      ]) == jsonencode([["POST", "EXACTLY", "NONE"], ["/api/", "STARTS_WITH", "URL_DECODE,NORMALIZE_PATH,LOWERCASE"]])
+      for r in aws_wafv2_web_acl.site[0].rule :
+      length(r.statement[0].rate_based_statement[0].scope_down_statement) == 0
+      && length(r.statement[0].rate_based_statement[0].custom_key) == 0
+      && length(r.statement[0].rate_based_statement[0].forwarded_ip_config) == 0
     ])
-    error_message = "It counts POSTs to /api/ only, on the decoded, normalised, lower-cased path."
+    error_message = "A plain per-address rate rule: every request counts, with no scope-down or custom keys, the Free plan's IP-based rate limiting."
   }
 
   assert {
@@ -304,14 +303,14 @@ run "flat_rate_plan_off" {
   }
 }
 
-run "api_post_limit_refuses_below_waf_least" {
+run "rate_per_address_limit_refuses_below_a_few_page_loads" {
   command = plan
 
   variables {
-    api_post_limit = 5
+    rate_per_address_limit = 50
   }
 
-  expect_failures = [var.api_post_limit]
+  expect_failures = [var.rate_per_address_limit]
 }
 
 run "no_permissions_boundary_by_default" {
